@@ -1,0 +1,11 @@
+{
+  "name": "discoverdesk-app",
+  "version": "27.0.1",
+  "private": true,
+  "description": "DiscoverDesk static app (index.html) + Vercel serverless functions (api/).",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "googleapis": "^140.0.1",
+    "jsdom": "^29.1.1"
+  }
+}

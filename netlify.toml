@@ -1,0 +1,30 @@
+# DiscoverDesk — Netlify config
+# The app is a single static index.html. Netlify serves it as-is.
+[build]
+  publish = "."
+
+# App shell shouldn't be cached, so redeploys show up instantly.
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache, must-revalidate"
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "SAMEORIGIN"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+# NOTE (Build 27): the api/ folder is Vercel-style and Netlify does NOT serve it.
+# The catch-all below would otherwise return index.html for /api/* and every
+# integration (email, Meta metrics, Sheets sync, AI search, webhooks) would fail
+# silently. Fail loudly instead, and set CFG.API_BASE in index.html to the Vercel
+# deployment that hosts those functions.
+[[redirects]]
+  from = "/api/*"
+  to = "/api-not-hosted-here"
+  status = 404
+  force = true
+
+# Force HTTPS + send bare / to the app
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
