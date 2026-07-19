@@ -762,15 +762,29 @@ const svg=(p,w=18)=>`<svg width="${w}" height="${w}" viewBox="0 0 24 24" fill="n
    Filled = "live cloud mode" (whole team, from anywhere).
    Step-by-step in SETUP.md.
 =========================================================== */
-const CFG={ SUPABASE_URL:'', SUPABASE_ANON_KEY:'',
+const CFG={
+  SUPABASE_URL:'https://jnefoficmhrvualdjrcq.supabase.co',
+  SUPABASE_ANON_KEY:'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpuZWZvZmljbWhydnVhbGRqcmNxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ0Nzk3OTUsImV4cCI6MjEwMDA1NTc5NX0.nIR7pKexqKXUwyy6RVgno7901h0NcOZN-6RLYptEeac',
   /* If this file is hosted somewhere that can't run the api/ functions
      (e.g. Hostinger shared hosting), set API_BASE to where they ARE hosted,
      e.g. 'https://discoverdesk.vercel.app'. Leave '' when on Vercel itself. */
-  API_BASE:'' };
+  API_BASE:''
+};
+
 const API=(p)=>((CFG.API_BASE||'').replace(/\/$/,'')+p);
 
 let SB=null;
-try{ if(CFG.SUPABASE_URL&&CFG.SUPABASE_ANON_KEY&&window.supabase){ SB=window.supabase.createClient(CFG.SUPABASE_URL,CFG.SUPABASE_ANON_KEY); } }catch(e){ console.error('Supabase init failed',e); }
+try{
+  if(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY && window.supabase){
+    SB=window.supabase.createClient(
+      CFG.SUPABASE_URL,
+      CFG.SUPABASE_ANON_KEY
+    );
+  }
+}catch(e){
+  console.error('Supabase init failed',e);
+}
+
 const CLOUD=!!SB;
 
 /* ===========================================================
