@@ -938,7 +938,7 @@ const App={
 
     this._settings=await store.get('dd:settings')||{};
     this._clive=await store.get('dd:clive')||{};
-}
+     },
   async save(what){this._cidx=null;const map={users:K.users,brands:K.brands,reqs:K.reqs,camps:K.camps,acts:K.acts,infl:K.infl,enq:K.enq,notif:K.notif,roster:K.roster};if(what)await store.set(map[what],this.db[what]);else for(const k in map)await store.set(map[k],this.db[k]);},
   async nextSeq(pfx){let s=await store.get(K.seq)||{};s[pfx]=(s[pfx]||0)+1;await store.set(K.seq,s);return pfx+'-'+String(s[pfx]).padStart(4,'0');},
 
