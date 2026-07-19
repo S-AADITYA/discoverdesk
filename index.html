@@ -898,16 +898,47 @@ const App={
   async loadProfiles(){try{const {data}=await SB.from('profiles').select('*');return (data||[]).map(p=>this.mapProfile(p));}catch(e){console.error('loadProfiles',e);return this.db.users||[];}},
   async load(){
     if(CLOUD){
-      this.db.users=await this.loadProfiles();
-      for(const k in K){if(k==='seq'||k==='users')continue;this.db[k]=await store.get(K[k])||[];}
+
+      // Load users
+      this.db.users = await this.loadProfiles();
+
+      // Load influencers directly from SQL
+      try{
+        const { data, error } = await SB
+          .from('influencers')
+          .select('*')
+          .order('followers', { ascending:false });
+
+        if(error){
+          console.error(error);
+          this.db.infl = [];
+        }else{
+          this.db.infl = data || [];
+        }
+      }catch(e){
+        console.error(e);
+        this.db.infl = [];
+      }
+
+      // Load everything else from KV
+      for(const k in K){
+        if(k==='seq' || k==='users' || k==='infl') continue;
+        this.db[k]=await store.get(K[k])||[];
+      }
+
       this._settings=await store.get('dd:settings')||{};
       this._clive=await store.get('dd:clive')||{};
       return;
     }
-    for(const k in K){if(k==='seq')continue;this.db[k]=await store.get(K[k])||[];}
+
+    for(const k in K){
+      if(k==='seq') continue;
+      this.db[k]=await store.get(K[k])||[];
+    }
+
     this._settings=await store.get('dd:settings')||{};
     this._clive=await store.get('dd:clive')||{};
-  },
+}
   async save(what){this._cidx=null;const map={users:K.users,brands:K.brands,reqs:K.reqs,camps:K.camps,acts:K.acts,infl:K.infl,enq:K.enq,notif:K.notif,roster:K.roster};if(what)await store.set(map[what],this.db[what]);else for(const k in map)await store.set(map[k],this.db[k]);},
   async nextSeq(pfx){let s=await store.get(K.seq)||{};s[pfx]=(s[pfx]||0)+1;await store.set(K.seq,s);return pfx+'-'+String(s[pfx]).padStart(4,'0');},
 
