@@ -27,6 +27,8 @@
 
 
 
+
+
 -- ############################################################
 -- ## supabase-requests-migration.sql
 -- ## Stage 1 - requests table + profiles.team_id
@@ -768,12 +770,18 @@ create or replace function public.team_uid_of_owner(o uuid) returns uuid
 
 -- PROFILES: nobody sees another department's people except admin.
 drop policy if exists p_select on public.profiles;
+-- Falls back to the department when either side has no team yet: Sales/KAM
+-- are deliberately unplaced after the backfill, and a strict team check would
+-- collapse the page to just yourself. The hard rule -- nobody sees another
+-- department except Admin -- still holds either way.
 create policy p_select on public.profiles for select using (
   public.is_admin()
   or id = auth.uid()                                   -- always see yourself
   or (public.current_role_key() = 'discovery_manager'  -- whole Discovery dept
       and department = 'discovery')
   or (team_uid is not null and team_uid = public.current_team_id())
+  or ((team_uid is null or public.current_team_id() is null)
+      and department = public.current_department())
 );
 
 -- TEAMS: readable by any active user (needed to render team names); only

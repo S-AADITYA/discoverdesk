@@ -1472,12 +1472,23 @@ const App={
        discovery_manager    own department  converted only       all
        discovery_employee   own team        none                 assigned only  */
   sameTeam(u){const a=this.me.teamUid,b=u&&u.teamUid;return !!a&&!!b&&a===b;},
+  /* Team scope with a graceful fallback: until teams are actually assigned
+     (before the RBAC migration runs, or for Sales/KAM we deliberately did not
+     auto-place), teamUid is null on both sides and a strict team check would
+     collapse every list to just yourself. Fall back to the department, which
+     still honours the hard rule that nobody sees another department. */
+  inMyScope(u){
+    if(!u)return false;
+    if(!this.me.teamUid||!u.teamUid)return deptOf(u)===this.dept();
+    return u.teamUid===this.me.teamUid;
+  },
   visPerson(u){
     if(!u)return false;
     if(this.can('admin'))return true;
     if(u.id===this.me.id)return true;
     if(this.roleKey()==='discovery_manager')return deptOf(u)==='discovery';
-    return this.sameTeam(u);
+    if(deptOf(u)!==this.dept())return false;   // never across departments
+    return this.inMyScope(u);
   },
   visReq(r){
     if(!r)return false;
@@ -1487,7 +1498,7 @@ const App={
     if(k==='discovery_employee')return r.assigneeId===this.me.id; // assigned only
     if(k==='sales_employee'||k==='kam_employee')return r.requesterId===this.me.id;
     if(k==='sales_manager'||k==='kam_manager')
-      return r.requesterId===this.me.id||this.sameTeam(this.user(r.requesterId)||{});
+      return r.requesterId===this.me.id||this.inMyScope(this.user(r.requesterId));
     return r.requesterId===this.me.id||r.assigneeId===this.me.id;
   },
   visEnq(e){
@@ -1498,7 +1509,7 @@ const App={
     if(k==='discovery_manager')return !!(e.convertedRequestId||e.status==='won');
     if(k==='sales_employee'||k==='kam_employee')return e.ownerId===this.me.id;
     if(k==='sales_manager'||k==='kam_manager')
-      return e.ownerId===this.me.id||this.sameTeam(this.user(e.ownerId)||{});
+      return e.ownerId===this.me.id||this.inMyScope(this.user(e.ownerId));
     return e.ownerId===this.me.id;
   },
   myReqs(){return (this.db.reqs||[]).filter(r=>this.visReq(r));},
