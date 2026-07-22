@@ -1062,6 +1062,19 @@ const App={
           team_id:r._teamId||this.userTeam(r.requesterId)||this.me.teamId||'default',
           owner_id:r.requesterId||null,
           assignee_id:r.assigneeId||null,
+          // B6 two-hop chain. owner_id/owner_team_id never change after insert
+          // (a DB trigger rejects it), so they are sent as-is.
+          owner_team_id:r.ownerTeamId||(this.user(r.requesterId)||{}).teamUid||null,
+          routed_to_manager_id:r.routedToManagerId||null,
+          routed_by_id:r.routedById||null,
+          routed_at:r.routedAt?new Date(r.routedAt).toISOString():null,
+          assigned_to_id:r.assignedToId||r.assigneeId||null,
+          assigned_by_id:r.assignedById||null,
+          assigned_at:r.assignedAt?new Date(r.assignedAt).toISOString():null,
+          discovery_started_at:r.discoveryStartedAt?new Date(r.discoveryStartedAt).toISOString():null,
+          discovery_started_by:r.discoveryStartedBy||null,
+          discovery_ended_at:r.discoveryEndedAt?new Date(r.discoveryEndedAt).toISOString():null,
+          discovery_ended_by:r.discoveryEndedBy||null,
           data:this.stripMeta(r),
         }));
         const {error}=await SB.from('requests').upsert(rows);
@@ -2134,13 +2147,35 @@ const App={
       return active.filter(u=>roleKey(u)==='discovery_employee');
     return [];
   },
+  /* B6 — which hop just happened depends on who is doing it. Sales/KAM can
+     only route to a Discovery Manager (hop 1, request stays unassigned at the
+     discovery level); a Discovery Manager assigns the employee (hop 2). */
+  recordHop(r,who){
+    const k=this.roleKey();
+    r.ownerTeamId=r.ownerTeamId||(this.user(r.requesterId)||{}).teamUid||null;
+    if(k.startsWith('sales')||k.startsWith('kam')){
+      r.routedToManagerId=who;r.routedById=this.me.id;r.routedAt=now();
+      r.status='assigned';
+      // Deliberately does NOT set assigneeId — hop 2 has not happened yet.
+    }else{
+      r.assignedToId=who;r.assignedById=this.me.id;r.assignedAt=now();
+      r.assigneeId=who;r.status='assigned';
+    }
+  },
+  // "Awaiting assignment by {manager}" rather than a blank or "Unassigned".
+  hopLabel(r){
+    if(!r)return '';
+    if(r.assigneeId||r.assignedToId)return '';
+    if(r.routedToManagerId)return 'Awaiting assignment by '+esc((this.user(r.routedToManagerId)||{}).name||'the Discovery Manager');
+    return 'Not yet routed';
+  },
   assignHint(){
     const k=this.roleKey();
     if(k.startsWith('sales')||k.startsWith('kam'))return 'Sales & KAM assign to a Discovery Manager, who then routes it to the right person.';
     if(k==='discovery_manager')return 'As a Discovery Manager you route this to a Discovery Employee.';
     return 'Pick who delivers this brief.';
   },
-  async assignReq(id){const r=this.req(id);const who=document.getElementById('assignSel').value;const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');r.assigneeId=who;r.status='assigned';r.assignedAt=now();this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');await this.notify(who,'Request assigned to you',`${r.id} · ${r.brandName}`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned ${r.id}`,body:`You've been assigned ${r.id} (${r.brandName}).`});await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Assigned','ok');this.renderNav();this.openReq(id);},
+  async assignReq(id){const r=this.req(id);const who=document.getElementById('assignSel').value;const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');this.recordHop(r,who);this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');await this.notify(who,'Request assigned to you',`${r.id} · ${r.brandName}`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned ${r.id}`,body:`You've been assigned ${r.id} (${r.brandName}).`});await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Assigned','ok');this.renderNav();this.openReq(id);},
   async publishDraft(id){const r=this.req(id);r.status='assigned';this.pushEvent(r,'Request published','create');await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Published','ok');this.renderNav();this.openReq(id);},
   async startWork(id){const r=this.req(id);r.status='in_progress';r.startedAt=now();this.pushEvent(r,'Started discovery','info');await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Marked in discovery','ok');this.openReq(id);},
   wireDrop(id){const dz=document.getElementById('dropZone');if(!dz)return;['dragover','dragenter'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.add('drag');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.remove('drag');}));dz.addEventListener('drop',ev=>{const f=ev.dataTransfer.files[0];if(f)this.parseSheet(f,id);});},
@@ -4294,6 +4329,19 @@ Object.assign(App,{
   submittedRound(r){return (r.rounds||[]).find(rd=>this.roundStatus(rd)==='submitted')||null;},
   discRunning(r){return !!(r.discoveryStartedAt&&!r.discoveryEndedAt);},
   isRequester(r){return !!r&&(r.requesterId===this.me.id||this.can('admin'));},
+  /* B9 — the Discovery Clock belongs to the people doing discovery, not the
+     Sales/KAM person who raised the request. Only the assigned Discovery
+     Employee, the Discovery Manager, or Admin may start or end it, and an
+     unassigned request cannot be started at all. */
+  canClock(r){
+    if(!r)return false;
+    if(this.can('admin')||this.roleKey()==='discovery_manager')return true;
+    return !!r.assigneeId&&r.assigneeId===this.me.id;
+  },
+  clockOwnerName(r){
+    const a=r&&r.assigneeId&&this.user(r.assigneeId);
+    return a?a.name:'the assigned discovery person';
+  },
   canRunDiscovery(r){return !!r&&this.can('discover')&&(r.assigneeId===this.me.id||this.can('admin')||this.can('assign'));},
   canFillRound(r){return !!r&&this.discRunning(r)&&!!this.openRound(r)&&(this.canRunDiscovery(r)||this.isRequester(r)||this.can('poolfill'));},
 
@@ -4308,7 +4356,8 @@ Object.assign(App,{
 
   async startDiscovery(id){
     const r=this.req(id);if(!r)return;
-    if(!this.isRequester(r))return this.toast('Only '+(this.user(r.requesterId)?.name||'the requester')+' can start discovery on this request.','err');
+    if(!r.assigneeId)return this.toast('Assign this request to start the clock.','err');
+    if(!this.canClock(r))return this.toast('Only '+this.clockOwnerName(r)+' (or the Discovery Manager) can start discovery on this request.','err');
     if(this.discRunning(r))return this.toast('Discovery is already running','err');
     if(!r.campaignId)return this.toast('This request has no campaign. Set the campaign first — every round belongs to a campaign.','err');
     r.discoveryStartedAt=now();r.discoveryEndedAt=null;r.discoveryStartedBy=this.me.id;r.closed=false;
@@ -4324,8 +4373,9 @@ Object.assign(App,{
 
   async endDiscovery(id){
     const r=this.req(id);if(!r)return;
-    if(!this.isRequester(r))return this.toast('Only '+(this.user(r.requesterId)?.name||'the requester')+' can end discovery on this request.','err');
+    if(!this.canClock(r))return this.toast('Only '+this.clockOwnerName(r)+' (or the Discovery Manager) can end discovery on this request.','err');
     if(!this.discRunning(r))return this.toast('Discovery is not running','err');
+    r.discoveryEndedBy=this.me.id;
     const sub=this.submittedRound(r);
     if(sub)return this.toast(`Round ${sub.round} is waiting on your decision. Select / reject the creators first, then end discovery.`,'err');
     const op=this.openRound(r);
@@ -4675,8 +4725,8 @@ Object.assign(App,{
       </div>
       <div class="dsr">
         ${!r.campaignId?(this.isRequester(r)?`<button class="btn sm" onclick="App.setCampaign('${r.id}')">${svg(IC.plus,15)} Set campaign first</button>`:`<span class="cellsub">No campaign set on this request yet</span>`):''}
-        ${r.campaignId&&!r.discoveryStartedAt?(this.isRequester(r)?`<button class="btn primary sm" onclick="App.startDiscovery('${r.id}')">${svg(IC.bolt,15)} Start discovery</button>`:`<span class="cellsub">Waiting on <b>${esc(this.user(r.requesterId)?.name||'the requester')}</b> to start discovery</span>`):''}
-        ${running?(this.isRequester(r)?`<button class="btn danger sm" onclick="App.endDiscovery('${r.id}')">${svg(IC.check,15)} End discovery</button>`:`<span class="cellsub">Only <b>${esc(this.user(r.requesterId)?.name||'the requester')}</b> can end this</span>`):''}
+        ${r.campaignId&&!r.discoveryStartedAt?(!r.assigneeId?`<span class="cellsub">Assign this request to start the clock.</span>`:this.canClock(r)?`<button class="btn primary sm" onclick="App.startDiscovery('${r.id}')">${svg(IC.bolt,15)} Start discovery</button>`:`<span class="cellsub">Waiting on <b>${esc(this.clockOwnerName(r))}</b> to start discovery</span>`):''}
+        ${running?(this.canClock(r)?`<button class="btn danger sm" onclick="App.endDiscovery('${r.id}')">${svg(IC.check,15)} End discovery</button>`:`<span class="cellsub">Only <b>${esc(this.clockOwnerName(r))}</b> can end this</span>`):''}
         ${r.discoveryEndedAt?`<span class="badge b-approved"><span class="d"></span>Closed after ${r.rounds.length} round${r.rounds.length!==1?'s':''}</span>`:''}
       </div></div>`;
 
