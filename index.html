@@ -894,8 +894,20 @@ const App={
     await this.load();
     this.enter();
   },
-  mapProfile(p){return {id:p.id,name:p.name,email:p.email,role:p.role,status:p.status,locked:!!p.locked,perms:p.perms||null,teamId:p.team_id||null,emailPrefs:p.email_prefs||{assigned:1,submitted:1,decision:1,account:1},createdAt:p.created_at?new Date(p.created_at).getTime():now()};},
+  mapProfile(p){return {id:p.id,name:p.name,email:p.email,role:p.role,status:p.status,locked:!!p.locked,perms:p.perms||null,mods:p.mods||null,teamId:p.team_id||null,emailPrefs:p.email_prefs||{assigned:1,submitted:1,decision:1,account:1},createdAt:p.created_at?new Date(p.created_at).getTime():now()};},
   async loadProfiles(){try{const {data}=await SB.from('profiles').select('*');return (data||[]).map(p=>this.mapProfile(p));}catch(e){console.error('loadProfiles',e);return this.db.users||[];}},
+  // PostgREST caps a plain select at 1000 rows, and the roster is well past
+  // that. Page through until a short page comes back.
+  async fetchAll(rel,order,asc){
+    const PAGE=1000,out=[];
+    for(let i=0;;i+=PAGE){
+      const {data,error}=await SB.from(rel).select('*')
+        .order(order||'created_at',{ascending:asc!==false}).range(i,i+PAGE-1);
+      if(error)throw error;
+      out.push(...(data||[]));
+      if(!data||data.length<PAGE)return out;
+    }
+  },
   async load(){
     if(CLOUD){
 
@@ -904,44 +916,52 @@ const App={
 
       // Load influencers directly from SQL
       try{
-        const { data, error } = await SB
-          .from('influencers')
-          .select('*')
-          .order('followers', { ascending:false });
-
-        if(error){
-          console.error(error);
-          this.db.infl = [];
-        }else{
-          this.db.infl = data || [];
-        }
+        this.db.infl = await this.fetchAll('influencers','followers',false);
       }catch(e){
-        console.error(e);
+        console.error('load influencers',e);
         this.db.infl = [];
       }
 
       // Load requests directly from SQL (role/team isolation enforced via RLS)
       try{
-        const { data, error } = await SB
-          .from('requests')
-          .select('*')
-          .order('created_at', { ascending:true });
-
-        if(error){
-          console.error(error);
-          this.db.reqs = [];
-        }else{
-          this.db.reqs = (data||[]).map(row=>({...row.data, id:row.id}));
-        }
+        const rows=await this.fetchAll('requests');
+        this.db.reqs = rows.map(row=>({...row.data, id:row.id, _teamId:row.team_id}));
       }catch(e){
-        console.error(e);
+        console.error('load requests',e);
         this.db.reqs = [];
       }
       this._reqIds = new Set(this.db.reqs.map(r=>r.id));
 
+      // Load enquiries directly from SQL (role/team isolation enforced via RLS)
+      try{
+        const rows=await this.fetchAll('enquiries');
+        this.db.enq = rows.map(row=>({...row.data, id:row.id, _teamId:row.team_id}));
+      }catch(e){
+        console.error('load enquiries',e);
+        this.db.enq = [];
+      }
+      this._enqIds = new Set(this.db.enq.map(e=>e.id));
+
+      // Load roster through the masking view. Phone/email come back empty
+      // unless this user actually holds the 'contacts' permission — that
+      // decision is made in Postgres, not here.
+      try{
+        const rows=await this.fetchAll('roster_v');
+        this.db.roster = rows.map(row=>({
+          ...row.data,
+          ...(row.contact||{}),
+          id:row.id,
+          _cmask:!row.contact_visible,
+        }));
+      }catch(e){
+        console.error('load roster',e);
+        this.db.roster = [];
+      }
+      this._rosterIds = new Set(this.db.roster.map(r=>r.id));
+
       // Load everything else from KV
       for(const k in K){
-        if(k==='seq' || k==='users' || k==='infl' || k==='reqs') continue;
+        if(k==='seq' || k==='users' || k==='infl' || k==='reqs' || k==='enq' || k==='roster') continue;
         this.db[k]=await store.get(K[k])||[];
       }
 
@@ -964,11 +984,15 @@ const App={
     const keys=what?[what]:Object.keys(map);
     for(const k of keys){
       if(k==='reqs' && CLOUD){ await this.saveReqsCloud(); continue; }
+      if(k==='enq'  && CLOUD){ await this.saveEnqCloud();  continue; }
+      if(k==='roster' && CLOUD){ await this.saveRosterCloud(); continue; }
       await store.set(map[k],this.db[k]);
     }
     this._lastLocalSave=Date.now();
   },
   userTeam(id){const u=this.user(id);return (u&&u.teamId)||null;},
+  // Strip the client-only mirror columns before writing a row's JSON back.
+  stripMeta(o){const c={...o};delete c._teamId;return c;},
   async saveReqsCloud(){
     const currentIds=new Set(this.db.reqs.map(r=>r.id));
     const removed=[...(this._reqIds||[])].filter(id=>!currentIds.has(id));
@@ -976,10 +1000,10 @@ const App={
       if(this.db.reqs.length){
         const rows=this.db.reqs.map(r=>({
           id:r.id,
-          team_id:this.userTeam(r.requesterId)||this.me.teamId||'default',
+          team_id:r._teamId||this.userTeam(r.requesterId)||this.me.teamId||'default',
           owner_id:r.requesterId||null,
           assignee_id:r.assigneeId||null,
-          data:r,
+          data:this.stripMeta(r),
         }));
         const {error}=await SB.from('requests').upsert(rows);
         if(error)console.error('saveReqsCloud upsert',error);
@@ -990,6 +1014,56 @@ const App={
       }
       this._reqIds=currentIds;
     }catch(e){ console.error('saveReqsCloud',e); }
+  },
+  async saveEnqCloud(){
+    const currentIds=new Set(this.db.enq.map(e=>e.id));
+    const removed=[...(this._enqIds||[])].filter(id=>!currentIds.has(id));
+    try{
+      if(this.db.enq.length){
+        const rows=this.db.enq.map(e=>({
+          id:e.id,
+          team_id:e._teamId||this.userTeam(e.ownerId)||this.me.teamId||'default',
+          owner_id:e.ownerId||null,
+          data:this.stripMeta(e),
+        }));
+        const {error}=await SB.from('enquiries').upsert(rows);
+        if(error)console.error('saveEnqCloud upsert',error);
+      }
+      if(removed.length){
+        const {error}=await SB.from('enquiries').delete().in('id',removed);
+        if(error)console.error('saveEnqCloud delete',error);
+      }
+      this._enqIds=currentIds;
+    }catch(e){ console.error('saveEnqCloud',e); }
+  },
+  // Roster rows are split server-side into data (everything) + contact
+  // (email/phone). We send contact back only if this user was allowed to see
+  // it; roster_sync() ignores it otherwise, so a masked user can never blank
+  // someone else's phone number by saving.
+  async saveRosterCloud(){
+    const currentIds=new Set(this.db.roster.map(r=>r.id));
+    const removed=[...(this._rosterIds||[])].filter(id=>!currentIds.has(id));
+    const rows=this.db.roster.map(r=>{
+      const d={...r};
+      delete d._cmask;delete d.email;delete d.phone;delete d.id;
+      return {id:r.id,data:d,contact:r._cmask?{}:{email:r.email||'',phone:r.phone||''}};
+    });
+    try{
+      // Chunk so one save of a big roster doesn't become a single huge request.
+      const CH=500;
+      for(let i=0;i<rows.length;i+=CH){
+        const {error}=await SB.rpc('roster_sync',{
+          p_rows:rows.slice(i,i+CH),
+          p_removed:i===0?removed:[],
+        });
+        if(error){console.error('saveRosterCloud',error);return this.toast('Roster save failed: '+(error.message||error),'err');}
+      }
+      if(!rows.length&&removed.length){
+        const {error}=await SB.rpc('roster_sync',{p_rows:[],p_removed:removed});
+        if(error){console.error('saveRosterCloud',error);return this.toast('Roster save failed: '+(error.message||error),'err');}
+      }
+      this._rosterIds=currentIds;
+    }catch(e){ console.error('saveRosterCloud',e); }
   },
   async nextSeq(pfx){let s=await store.get(K.seq)||{};s[pfx]=(s[pfx]||0)+1;await store.set(K.seq,s);return pfx+'-'+String(s[pfx]).padStart(4,'0');},
 
@@ -1230,6 +1304,10 @@ const App={
         .on('postgres_changes',{event:'*',schema:'public',table:'kv'},()=>{this._liveDirty=true;this.maybeRefresh();})
         .on('postgres_changes',{event:'*',schema:'public',table:'profiles'},()=>{this._liveDirty=true;this.maybeRefresh();})
         .on('postgres_changes',{event:'*',schema:'public',table:'requests'},()=>{this._liveDirty=true;this.maybeRefresh();})
+        .on('postgres_changes',{event:'*',schema:'public',table:'enquiries'},()=>{this._liveDirty=true;this.maybeRefresh();})
+        /* roster is deliberately NOT in the realtime publication — its payloads
+           would bypass the contact-masking view. roster_sync() bumps a kv key
+           instead, so the kv listener above covers roster changes too. */
         .subscribe();
       setInterval(()=>this.maybeRefresh(),9000);
     }catch(e){console.error('realtime',e);}
@@ -1245,6 +1323,30 @@ const App={
     if(this.view&&!busy)this.go(this.view);
   },
   can(perm){const u=this.me;if(u.perms&&u.perms[perm]!==undefined&&u.perms[perm]!==null)return !!u.perms[perm];return !!(ROLE_DEFAULTS[u.role]||{})[perm];},
+
+  /* ===== Visibility (Stage 4) =====
+     Client-side mirror of the RLS rules in the Stage 1/2 migrations: admin
+     sees everything, everyone else sees what they own, what's assigned to
+     them, and their team's. In CLOUD mode RLS has already filtered the rows,
+     so this is defence in depth; in LOCAL mode it's the only thing enforcing
+     it. Unteamed records fall back to 'default' — the same team the
+     migrations put everybody in — so nothing changes until you actually
+     split people into teams. */
+  myTeam(){return this.me.teamId||'default';},
+  visReq(r){
+    if(!r)return false;
+    if(this.can('admin'))return true;
+    if(r.requesterId===this.me.id||r.assigneeId===this.me.id)return true;
+    return (r._teamId||this.userTeam(r.requesterId)||'default')===this.myTeam();
+  },
+  visEnq(e){
+    if(!e)return false;
+    if(this.can('admin'))return true;
+    if(e.ownerId===this.me.id)return true;
+    return (e._teamId||this.userTeam(e.ownerId)||'default')===this.myTeam();
+  },
+  myReqs(){return (this.db.reqs||[]).filter(r=>this.visReq(r));},
+  myEnq(){return (this.db.enq||[]).filter(e=>this.visEnq(e));},
   effPerms(u){const base=ROLE_DEFAULTS[u.role]||{};const out={};ALL_PERMS.forEach(([k])=>{out[k]=u.perms&&u.perms[k]!==undefined&&u.perms[k]!==null?!!u.perms[k]:!!base[k];});return out;},
 
   modVisible(u,id,def){if(u&&u.mods&&Object.prototype.hasOwnProperty.call(u.mods,id))return !!u.mods[id];return !!def;},
@@ -1253,9 +1355,9 @@ const App={
     const pending=this.db.users.filter(u=>u.status==='pending').length;
     const myQ=this.db.reqs.filter(r=>r.assigneeId===this.me.id&&['assigned','in_progress','rejected'].includes(r.status)).length;
     const toReview=this.db.reqs.filter(r=>r.status==='under_review'&&(this.can('admin')||r.requesterId===this.me.id)).length;
-    const openEnq=this.db.enq.filter(e=>!['won','lost'].includes(e.status)).length;
+    const openEnq=this.myEnq().filter(e=>!['won','lost'].includes(e.status)).length;
     const unread=this.db.notif.filter(n=>n.to===this.me.id&&!n.read).length;
-    const openReq=this.db.reqs.filter(r=>!['approved','draft'].includes(r.status)).length;
+    const openReq=this.myReqs().filter(r=>!['approved','draft'].includes(r.status)).length;
     const vis=id=>this.modVisible(this.me,id,this.modDefault(this.me,id));
     const META={
       mission:{ic:IC.spark,t:'Mission Control'},
@@ -1310,10 +1412,32 @@ const App={
   async saveModuleAccess(uid){
     const u=this.user(uid);const MODS=['dashboard','requests','discovery','review','enquiries','board','campaigns','roster','bridge','creators','influencers','clientview','exec','reports','activity','inbox','team','integrations'];
     u.mods={};MODS.forEach(id=>{const el=document.getElementById('mod_'+id);if(el)u.mods[id]=el.checked?1:0;});
-    if(CLOUD){this._lastLocalSave=Date.now();try{await SB.from('profiles').update({mods:u.mods}).eq('id',uid);}catch(e){}}else{await this.save('users');}
+    if(CLOUD){
+      this._lastLocalSave=Date.now();
+      try{
+        const {error}=await SB.from('profiles').update({mods:u.mods}).eq('id',uid);
+        if(error)throw error;
+      }catch(e){
+        console.error('saveModuleAccess',e);
+        return this.toast('Save failed: '+(e.message||e),'err');
+      }
+    }else{await this.save('users');}
     this.toast('Module access updated','ok');this.closeAll();if(uid===this.me.id){this.me.mods=u.mods;this.renderNav();}
   },
-  async resetModuleAccess(uid){const u=this.user(uid);delete u.mods;if(CLOUD){this._lastLocalSave=Date.now();try{await SB.from('profiles').update({mods:null}).eq('id',uid);}catch(e){}}else{await this.save('users');}this.toast('Reset to role defaults','ok');this.moduleAccessModal(uid);if(uid===this.me.id)this.renderNav();},
+  async resetModuleAccess(uid){
+    const u=this.user(uid);delete u.mods;
+    if(CLOUD){
+      this._lastLocalSave=Date.now();
+      try{
+        const {error}=await SB.from('profiles').update({mods:null}).eq('id',uid);
+        if(error)throw error;
+      }catch(e){
+        console.error('resetModuleAccess',e);
+        return this.toast('Save failed: '+(e.message||e),'err');
+      }
+    }else{await this.save('users');}
+    this.toast('Reset to role defaults','ok');this.moduleAccessModal(uid);if(uid===this.me.id)this.renderNav();
+  },
   go(v){
     this.view=v;
     document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
@@ -1353,14 +1477,14 @@ const App={
 
   /* ================= DASHBOARD ================= */
   vDashboard(){
-    const R=this.db.reqs.filter(r=>r.status!=='draft');
+    const R=this.myReqs().filter(r=>r.status!=='draft');
     const open=R.filter(r=>r.status!=='approved');
     const inRev=R.filter(r=>r.status==='under_review');
     const overdue=open.filter(r=>r.deadline&&r.deadline<now());
     const done=R.filter(r=>r.submittedAt&&r.assignedAt);
     const avgTAT=done.length?Math.round(done.reduce((s,r)=>s+durH(r.assignedAt,r.submittedAt),0)/done.length):null;
     const totalRounds=R.reduce((s,r)=>s+r.rounds.length,0),rejRounds=R.reduce((s,r)=>s+r.rounds.filter(x=>x.decision==='rejected').length,0);
-    const openEnq=this.db.enq.filter(e=>!['won','lost'].includes(e.status)).length;
+    const openEnq=this.myEnq().filter(e=>!['won','lost'].includes(e.status)).length;
     const kpi=(ic,cl,v,l,tr)=>`<div class="card kpi"><div class="ic" style="background:${cl}20;color:${cl}">${svg(ic,19)}</div><div class="v">${v}</div><div class="l">${l}</div>${tr||''}</div>`;
     const cup=(n,suf='')=>`<span class="cup" data-to="${n}"${suf?` data-suf="${suf}"`:''}>0${suf}</span>`;
     // department lens
@@ -1409,7 +1533,7 @@ const App={
   /* ================= KANBAN BOARD ================= */
   vBoard(){
     const cols=[['assigned','Assigned','#2b7fff'],['in_progress','In Discovery','#e0900a'],['submitted','Submitted','#5847eb'],['under_review','In Review','#6b3fd4'],['rejected','Needs rework','#e5484d']];
-    let R=this.db.reqs.filter(r=>!['draft','approved'].includes(r.status));
+    let R=this.myReqs().filter(r=>!['draft','approved'].includes(r.status));
     if(this._q)R=R.filter(r=>(r.brandName+r.niche+r.id).toLowerCase().includes(this._q));
     this.set(`
       <div class="pagehead"><div class="lead"><h2>Pipeline board</h2><p>Drag a card to move it between stages · updates everyone live</p></div>
@@ -1536,14 +1660,14 @@ const App={
   /* ================= ENQUIRIES ================= */
   vEnquiries(){
     if(!this.can('enquiries'))return this.set(this.emptyBox('No access','Enquiries are for Sales, KAM & Admin.'));
-    let E=[...this.db.enq];
+    let E=[...this.myEnq()];
     if(this._q)E=E.filter(e=>(e.client+e.contact+e.service).toLowerCase().includes(this._q));
     E.sort((a,b)=>b.createdAt-a.createdAt);
     const eb=s=>({new:'b-new',qualified:'b-qualified',proposal:'b-proposal',won:'b-won',lost:'b-lost'}[s]||'b-draft');
     this.set(`
       <div class="pagehead"><div class="lead"><h2>Enquiries</h2><p>${E.length} logged · convert a qualified enquiry into a discovery request</p></div>
         <div class="acts">${this.can('export')?`<button class="btn ghost" onclick="App.exportEnq()">${svg(IC.down,15)} Export</button>`:''}<button class="btn primary" onclick="App.openNewEnq()">${svg(IC.plus,16)} Log enquiry</button></div></div>
-      ${(()=>{const all=this.db.enq;const cnt=s=>all.filter(e=>e.status===s).length;const open=all.filter(e=>!['won','lost'].includes(e.status)).length;const won=cnt('won');const closed=won+cnt('lost');const conv=closed?Math.round(won/closed*100):0;return `<div class="card pad" style="margin-bottom:16px"><div class="metric-row"><div class="m"><div class="v"><span class="cup" data-to="${all.length}">0</span></div><div class="l">Total</div></div><div class="m"><div class="v"><span class="cup" data-to="${open}">0</span></div><div class="l">Open</div></div><div class="m"><div class="v"><span class="cup" data-to="${cnt('qualified')}">0</span></div><div class="l">Qualified</div></div><div class="m"><div class="v"><span class="cup" data-to="${cnt('proposal')}">0</span></div><div class="l">Proposal</div></div><div class="m"><div class="v" style="color:var(--success)"><span class="cup" data-to="${won}">0</span></div><div class="l">Won</div></div><div class="m"><div class="v"><span class="cup" data-to="${conv}" data-suf="%">0%</span></div><div class="l">Win rate</div></div></div></div>`;})()}
+      ${(()=>{const all=this.myEnq();const cnt=s=>all.filter(e=>e.status===s).length;const open=all.filter(e=>!['won','lost'].includes(e.status)).length;const won=cnt('won');const closed=won+cnt('lost');const conv=closed?Math.round(won/closed*100):0;return `<div class="card pad" style="margin-bottom:16px"><div class="metric-row"><div class="m"><div class="v"><span class="cup" data-to="${all.length}">0</span></div><div class="l">Total</div></div><div class="m"><div class="v"><span class="cup" data-to="${open}">0</span></div><div class="l">Open</div></div><div class="m"><div class="v"><span class="cup" data-to="${cnt('qualified')}">0</span></div><div class="l">Qualified</div></div><div class="m"><div class="v"><span class="cup" data-to="${cnt('proposal')}">0</span></div><div class="l">Proposal</div></div><div class="m"><div class="v" style="color:var(--success)"><span class="cup" data-to="${won}">0</span></div><div class="l">Won</div></div><div class="m"><div class="v"><span class="cup" data-to="${conv}" data-suf="%">0%</span></div><div class="l">Win rate</div></div></div></div>`;})()}
       <div class="toolbar">${[['all','All'],['new','New'],['qualified','Qualified'],['proposal','Proposal'],['won','Won'],['lost','Lost']].map(([k,l])=>`<span class="chip ${(this._efilter||'all')===k?'on':''}" onclick="App._efilter='${k}';App.vEnquiries()">${l}</span>`).join('')}</div>
       <div class="card">${E.length?`<table class="tbl"><thead><tr><th>Client</th><th>Campaign</th><th>Service</th><th>Budget</th><th>Owner</th><th>Source</th><th>Status</th><th>Logged</th><th></th></tr></thead><tbody>
         ${E.map(e=>`<tr class="click" onclick="App.openEnq('${e.id}')">
@@ -1620,7 +1744,7 @@ const App={
   async bulkAssign(who){const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.me.role==='sales'||this.me.role==='kam'?'a Discovery Manager':'a discovery person'),'err');const ids=Object.keys(this._rsel).filter(k=>this._rsel[k]);ids.forEach(id=>{const r=this.req(id);if(r){r.assigneeId=who;if(r.status==='draft')return;r.status='assigned';r.assignedAt=r.assignedAt||now();this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');}});await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast(ids.length+' assigned','ok');this._rsel={};this.renderNav();this.vRequests();},
   async bulkPriority(p){const ids=Object.keys(this._rsel).filter(k=>this._rsel[k]);ids.forEach(id=>{const r=this.req(id);if(r)r.priority=p;});await this.save('reqs');this.toast(ids.length+' updated','ok');this._rsel={};this.renderNav();this.vRequests();},
   exportReqsSel(){const ids=Object.keys(this._rsel).filter(k=>this._rsel[k]);this.export(this.db.reqs.filter(r=>ids.includes(r.id)).map(r=>({ID:r.id,Brand:r.brandName,Niche:r.niche,Priority:r.priority,Flags:this.flags(r).join('; '),Status:r.status,Discovery:this.user(r.assigneeId)?.name||'',Rounds:r.rounds.length})),'requests_selected.xlsx');},
-  exportReqs(){this.export(this.db.reqs.filter(r=>r.status!=='draft').map(r=>({ID:r.id,Brand:r.brandName,Niche:r.niche,Type:r.reqType,Round:r.round,Requester:this.user(r.requesterId)?.name,Discovery:this.user(r.assigneeId)?.name||'',FollowersMin:r.fMin,FollowersMax:r.fMax,Platform:r.platform,Qty:r.qty,Rounds:r.rounds.length,Rejections:r.rounds.filter(x=>x.decision==='rejected').length,Status:r.status,Deadline:r.deadline?fmtDate(r.deadline):'',TurnaroundH:durH(r.assignedAt,r.submittedAt)})),'requests.xlsx');},
+  exportReqs(){this.export(this.myReqs().filter(r=>r.status!=='draft').map(r=>({ID:r.id,Brand:r.brandName,Niche:r.niche,Type:r.reqType,Round:r.round,Requester:this.user(r.requesterId)?.name,Discovery:this.user(r.assigneeId)?.name||'',FollowersMin:r.fMin,FollowersMax:r.fMax,Platform:r.platform,Qty:r.qty,Rounds:r.rounds.length,Rejections:r.rounds.filter(x=>x.decision==='rejected').length,Status:r.status,Deadline:r.deadline?fmtDate(r.deadline):'',TurnaroundH:durH(r.assignedAt,r.submittedAt)})),'requests.xlsx');},
   emptyBox(h,p,btn){return `<div class="empty"><div class="ic">${svg(IC.inbox,26)}</div><h3>${h}</h3><p>${p}</p>${btn||''}</div>`;},
 
   openNewReq(pre){
@@ -2561,7 +2685,7 @@ const App={
 
   /* ================= 1. MISSION CONTROL ================= */
   vMission(){
-    const R=this.db.reqs.filter(r=>r.status!=='draft');
+    const R=this.myReqs().filter(r=>r.status!=='draft');
     const newR=R.filter(r=>r.status==='assigned'||!r.assigneeId).length;
     const running=R.filter(r=>['assigned','in_progress'].includes(r.status)).length;
     const submitted=R.filter(r=>r.status==='submitted'||r.status==='under_review').length;
@@ -3319,7 +3443,7 @@ const App={
     const admin=this.can('admin'),mgr=this.can('assign')||this.can('review');
     const tabs=[];if(admin)tabs.push(['ceo','CEO']);if(admin)tabs.push(['cos','Chief of Staff']);if(mgr||admin)tabs.push(['manager','Manager']);tabs.push(['employee','Employee']);
     let tab=this._execTab||tabs[0][0];if(!tabs.some(t=>t[0]===tab))tab=tabs[0][0];
-    const R=this.db.reqs.filter(r=>r.status!=='draft');const open=R.filter(r=>!['approved'].includes(r.status));
+    const R=this.myReqs().filter(r=>r.status!=='draft');const open=R.filter(r=>!['approved'].includes(r.status));
     const delivered=R.filter(r=>r.status==='approved');const overdue=open.filter(r=>r.deadline&&r.deadline<now());
     const wk=[...Array(8)].map((_,i)=>({start:now()-(7-i)*7*864e5,end:now()-(6-i)*7*864e5,n:0}));
     R.forEach(r=>r.rounds.forEach(rd=>{if(rd.reviewedAt&&(rd.decision==='approved'||rd.decision==='partial')){const b=wk.find(w=>rd.reviewedAt>=w.start&&rd.reviewedAt<w.end);if(b)b.n++;}}));
@@ -3626,7 +3750,7 @@ const App={
   },
   vReports(){
     const range=this._range||'all';const cut=range==='all'?0:now()-(+range)*864e5;
-    const R=this.db.reqs.filter(r=>r.status!=='draft'&&r.createdAt>=cut);
+    const R=this.myReqs().filter(r=>r.status!=='draft'&&r.createdAt>=cut);
     const byReq={};R.forEach(r=>{const n=this.user(r.requesterId)?.name||'—';byReq[n]=(byReq[n]||0)+1;});
     const dist={};R.forEach(r=>{dist[r.status]=(dist[r.status]||0)+1;});
     const rejBrand={};R.forEach(r=>{const rej=r.rounds.filter(x=>x.decision==='rejected').length;if(rej)rejBrand[r.brandName]=(rejBrand[r.brandName]||0)+rej;});
@@ -3636,13 +3760,13 @@ const App={
     const onTimePct=delivered.length?Math.round(onTime/delivered.length*100):0;
     // weekly buckets (last 8 weeks)
     const weeks=8;const wk=[...Array(weeks)].map((_,i)=>{const end=now()-(weeks-1-i)*7*864e5;return {start:end-7*864e5,end,raised:0,delivered:0,rej:0};});
-    this.db.reqs.filter(r=>r.status!=='draft').forEach(r=>{const b=wk.find(w=>r.createdAt>=w.start&&r.createdAt<w.end+1);if(b)b.raised++;r.rounds.forEach(rd=>{if(rd.reviewedAt){const bb=wk.find(w=>rd.reviewedAt>=w.start&&rd.reviewedAt<w.end+1);if(bb){if(rd.decision==='approved'||rd.decision==='partial')bb.delivered++;if(rd.decision==='rejected')bb.rej++;}}});});
+    this.myReqs().filter(r=>r.status!=='draft').forEach(r=>{const b=wk.find(w=>r.createdAt>=w.start&&r.createdAt<w.end+1);if(b)b.raised++;r.rounds.forEach(rd=>{if(rd.reviewedAt){const bb=wk.find(w=>rd.reviewedAt>=w.start&&rd.reviewedAt<w.end+1);if(bb){if(rd.decision==='approved'||rd.decision==='partial')bb.delivered++;if(rd.decision==='rejected')bb.rej++;}}});});
     const wkLabels=wk.map(w=>D(w.start).toLocaleDateString('en-US',{month:'numeric',day:'numeric'}));
     // discovery leaderboard
     const lead={};this.db.reqs.forEach(r=>{if(!r.assigneeId)return;const l=lead[r.assigneeId]=lead[r.assigneeId]||{del:0,tat:[],rej:0,rounds:0};if(r.status==='approved')l.del++;if(r.assigneeId&&r.submittedAt)l.tat.push(durH(r.assignedAt,r.submittedAt));r.rounds.forEach(rd=>{l.rounds++;if(rd.decision==='rejected')l.rej++;});});
     const leadRows=Object.entries(lead).map(([id,l])=>({name:this.user(id)?.name||'—',del:l.del,tat:l.tat.length?Math.round(l.tat.reduce((s,x)=>s+x,0)/l.tat.length):null,rejRate:l.rounds?Math.round(l.rej/l.rounds*100):0})).sort((a,b)=>b.del-a.del);
     // brand performance
-    const brandPerf={};this.db.reqs.filter(r=>r.status!=='draft').forEach(r=>{const b=brandPerf[r.brandName]=brandPerf[r.brandName]||{req:0,del:0,rounds:0,rej:0};b.req++;if(r.status==='approved')b.del++;r.rounds.forEach(rd=>{b.rounds++;if(rd.decision==='rejected')b.rej++;});});
+    const brandPerf={};this.myReqs().filter(r=>r.status!=='draft').forEach(r=>{const b=brandPerf[r.brandName]=brandPerf[r.brandName]||{req:0,del:0,rounds:0,rej:0};b.req++;if(r.status==='approved')b.del++;r.rounds.forEach(rd=>{b.rounds++;if(rd.decision==='rejected')b.rej++;});});
     const bar=(data,unit='')=>{const max=Math.max(1,...data.map(d=>d[1]));return data.map(([l,v])=>`<div class="barrow"><div class="bl">${esc(l)}</div><div class="bt"><div class="bf" style="width:${Math.max(6,v/max*100)}%">${v?(v+unit):''}</div></div></div>`).join('');};
     const dc={assigned:'#2b7fff',in_progress:'#e0900a',submitted:'#5847eb',under_review:'#6b3fd4',approved:'#0ea472',rejected:'#e5484d'},dl={assigned:'Assigned',in_progress:'In Discovery',submitted:'Submitted',under_review:'In Review',approved:'Delivered',rejected:'Rejected'};
     const dt=Object.values(dist).reduce((s,x)=>s+x,0)||1;let acc=0;const seg=Object.entries(dist).map(([k,v])=>{const s=acc/dt*360;acc+=v;return `${dc[k]||'#ccc'} ${s}deg ${acc/dt*360}deg`;}).join(',');
@@ -3701,7 +3825,7 @@ const App={
       </div>
       <div class="two-col" style="margin-top:16px">
         <div class="card chart-card"><div class="ct">Follower band demand</div><div class="cs">Requested audience size</div>${(()=>{const bands={'<10K':0,'10–50K':0,'50–200K':0,'200K–1M':0,'1M+':0};R.forEach(r=>{const m=r.fMax||r.fMin||0;if(m<1e4)bands['<10K']++;else if(m<5e4)bands['10–50K']++;else if(m<2e5)bands['50–200K']++;else if(m<1e6)bands['200K–1M']++;else bands['1M+']++;});return Object.values(bands).some(x=>x)?bar(Object.entries(bands)):'<div class="cellsub">No data</div>';})()}</div>
-        <div class="card chart-card"><div class="ct">Avg rounds by brand</div><div class="cs">Rework pressure per company</div>${(()=>{const t={};this.db.reqs.filter(r=>r.status!=='draft').forEach(r=>{(t[r.brandName]=t[r.brandName]||[]).push(r.rounds.length||1);});const d=Object.entries(t).map(([n,a])=>[n,+(a.reduce((s,x)=>s+x,0)/a.length).toFixed(1)]);return d.length?bar(d.sort((a,b)=>b[1]-a[1])):'<div class="cellsub">No data</div>';})()}</div>
+        <div class="card chart-card"><div class="ct">Avg rounds by brand</div><div class="cs">Rework pressure per company</div>${(()=>{const t={};this.myReqs().filter(r=>r.status!=='draft').forEach(r=>{(t[r.brandName]=t[r.brandName]||[]).push(r.rounds.length||1);});const d=Object.entries(t).map(([n,a])=>[n,+(a.reduce((s,x)=>s+x,0)/a.length).toFixed(1)]);return d.length?bar(d.sort((a,b)=>b[1]-a[1])):'<div class="cellsub">No data</div>';})()}</div>
       </div>
       <div class="two-col" style="margin-top:16px">
         <div class="card chart-card"><div class="ct">Enquiries by service</div><div class="cs">What new business wants</div>${(()=>{const f={};this.db.enq.forEach(e=>{const s=(e.service||'—');f[s]=(f[s]||0)+1;});const d=Object.entries(f).sort((a,b)=>b[1]-a[1]);return d.length?bar(d):'<div class="cellsub">No enquiries</div>';})()}</div>

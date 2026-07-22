@@ -98,7 +98,7 @@ alter publication supabase_realtime add table public.requests;
 -- 6) ONE-TIME MIGRATION — copy requests out of the kv blob.
 --    Safe to run more than once: existing rows are refreshed, not duplicated.
 insert into public.requests (id, team_id, owner_id, assignee_id, data, created_at)
-select
+select distinct on (r->>'id')
   r->>'id' as id,
   coalesce(
     (select p.team_id from public.profiles p where p.id = public.safe_uuid(r->>'requesterId')),
