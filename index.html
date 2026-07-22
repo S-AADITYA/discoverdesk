@@ -847,16 +847,45 @@ const nfmt=n=>{n=+n||0;return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFix
 const parseFol=s=>{if(typeof s==='number')return s;s=String(s).trim().toUpperCase().replace(/,/g,'');if(s.endsWith('M'))return parseFloat(s)*1e6;if(s.endsWith('K'))return parseFloat(s)*1e3;return parseFloat(s)||0;};
 const STAGES=[['assigned','Assigned'],['in_progress','In Discovery'],['submitted','Submitted'],['under_review','In Review'],['approved','Delivered']];
 const statusBadge=s=>{const m={draft:['b-draft','Draft'],assigned:['b-assigned','Assigned'],in_progress:['b-progress','In Discovery'],submitted:['b-submitted','Submitted'],under_review:['b-review','In Review'],approved:['b-approved','Approved'],rejected:['b-rejected','Rejected']};const[c,t]=m[s]||['b-draft',s];return `<span class="badge ${c}"><span class="d"></span>${t}</span>`;};
-const ROLES={sales:'Sales',kam:'KAM',discovery:'Discovery',manager:'Discovery Manager',admin:'Admin'};
+/* Seven roles = department + designation (Section A1). This is the complete
+   list and the exact labels used in the Permissions modal. "employee",
+   never "executive". */
+const ROLES={
+  sales_manager:'Sales Manager',
+  sales_employee:'Sales Employee',
+  kam_manager:'KAM Manager',
+  kam_employee:'KAM Employee',
+  discovery_manager:'Discovery Manager',
+  discovery_employee:'Discovery Employee',
+  admin:'Admin',
+};
+const DEPTS=[['sales','Sales','#ff6b5d'],['kam','KAM','#2b7fff'],['discovery','Discovery','#5847eb'],['admin','Admin','#0ea472']];
+// Legacy 5-role -> 7-role. Mirrors the SQL backfill exactly.
+const ROLE_MIGRATE={sales:'sales_employee',kam:'kam_employee',discovery:'discovery_employee',manager:'discovery_manager',admin:'admin'};
+// 7-role key -> legacy 5-role value, so the old `role` column stays consistent
+// while both exist. Mirrors sync_legacy_role() in supabase-rbac-migration.sql.
+const LEGACY_ROLE={sales_manager:'sales',sales_employee:'sales',kam_manager:'kam',kam_employee:'kam',discovery_manager:'manager',discovery_employee:'discovery',admin:'admin'};
+const roleKey=u=>(u&&(u.roleKey||ROLE_MIGRATE[u.role]))||'sales_employee';
+const deptOf=u=>{const k=roleKey(u);return k.startsWith('sales')?'sales':k.startsWith('kam')?'kam':k.startsWith('discovery')?'discovery':'admin';};
+const isMgr=u=>{const k=roleKey(u);return k==='admin'||k.endsWith('_manager');};
 const ALL_PERMS=[['raise','Raise requests'],['enquiries','Manage enquiries'],['assign','Assign discovery'],['discover','Deliver profiles'],['review','Review, rounds & approve'],['influencers','Edit brand sheets'],['contacts','See creator phone & email'],['roster','Roster & influencer DB'],['bridge','Roster Bridge (P&L / internal cost)'],['brandcost','See brand cost (what client pays)'],['poolfill','Fill live requests from the campaign pool'],['clientview','End-client view'],['export','Export & download'],['seeall','See all requests (not just own)'],['integrations','Integrations'],['admin','Admin & accounts']];
+/* Defaults per role key. 'raise' is off for discovery_employee (B8).
+   The five legacy keys are kept as aliases so a session that loaded before
+   the migration ran still resolves permissions instead of falling to {}. */
 const ROLE_DEFAULTS={
-  sales:{raise:1,enquiries:1,review:1,influencers:0,clientview:1,brandcost:1,export:1,poolfill:1},
-  kam:{raise:1,enquiries:1,review:1,influencers:1,roster:1,clientview:1,contacts:1,brandcost:1,export:1,poolfill:1},
-  discovery:{discover:1,influencers:1,roster:1,export:1,poolfill:1},
-  manager:{raise:1,enquiries:1,assign:1,review:1,discover:1,influencers:1,roster:1,clientview:1,contacts:1,brandcost:1,export:1,poolfill:1},
+  sales_employee:{raise:1,enquiries:1,review:1,influencers:0,clientview:1,brandcost:1,export:1,poolfill:1},
+  sales_manager:{raise:1,enquiries:1,review:1,influencers:0,clientview:1,brandcost:1,export:1,poolfill:1,seeall:1},
+  kam_employee:{raise:1,enquiries:1,review:1,influencers:1,roster:1,clientview:1,contacts:1,brandcost:1,export:1,poolfill:1},
+  kam_manager:{raise:1,enquiries:1,review:1,influencers:1,roster:1,clientview:1,contacts:1,brandcost:1,export:1,poolfill:1,seeall:1},
+  discovery_employee:{discover:1,influencers:1,roster:1,export:1,poolfill:1},
+  discovery_manager:{raise:1,enquiries:1,assign:1,review:1,discover:1,influencers:1,roster:1,clientview:1,contacts:1,brandcost:1,export:1,poolfill:1,seeall:1},
   admin:{raise:1,enquiries:1,assign:1,discover:1,review:1,influencers:1,roster:1,bridge:1,brandcost:1,clientview:1,contacts:1,export:1,integrations:1,admin:1,poolfill:1},
 };
-const ROLE_LABEL={sales:'Sales',kam:'KAM',discovery:'Discovery',manager:'Discovery Manager',admin:'Admin'};
+ROLE_DEFAULTS.sales=ROLE_DEFAULTS.sales_employee;
+ROLE_DEFAULTS.kam=ROLE_DEFAULTS.kam_employee;
+ROLE_DEFAULTS.discovery=ROLE_DEFAULTS.discovery_employee;
+ROLE_DEFAULTS.manager=ROLE_DEFAULTS.discovery_manager;
+const ROLE_LABEL=ROLES;
 
 const App={
   db:{users:[],brands:[],reqs:[],camps:[],acts:[],infl:[],enq:[],notif:[],roster:[],audit:[]},
@@ -894,7 +923,7 @@ const App={
     await this.load();
     this.enter();
   },
-  mapProfile(p){return {id:p.id,name:p.name,email:p.email,role:p.role,status:p.status,locked:!!p.locked,perms:p.perms||null,mods:p.mods||null,teamId:p.team_id||null,emailPrefs:p.email_prefs||{assigned:1,submitted:1,decision:1,account:1},createdAt:p.created_at?new Date(p.created_at).getTime():now()};},
+  mapProfile(p){return {id:p.id,name:p.name,email:p.email,role:p.role,roleKey:p.role_key||ROLE_MIGRATE[p.role]||null,department:p.department||null,designation:p.designation||null,status:p.status,locked:!!p.locked,perms:p.perms||null,mods:p.mods||null,teamId:p.team_id||null,teamUid:p.team_uid||null,emailPrefs:p.email_prefs||{assigned:1,submitted:1,decision:1,account:1},createdAt:p.created_at?new Date(p.created_at).getTime():now()};},
   async loadProfiles(){try{const {data}=await SB.from('profiles').select('*');return (data||[]).map(p=>this.mapProfile(p));}catch(e){console.error('loadProfiles',e);return this.db.users||[];}},
   // PostgREST caps a plain select at 1000 rows, and the roster is well past
   // that. Page through until a short page comes back.
@@ -919,6 +948,16 @@ const App={
 
       // Load users
       this.db.users = await this.loadProfiles();
+
+      // Teams (A2). Falls back to empty if the RBAC migration hasn't run.
+      try{
+        const {data,error}=await SB.from('teams').select('*').order('department',{ascending:true});
+        if(error)throw error;
+        this.db.teams=(data||[]).map(t=>({id:t.id,name:t.name,department:t.department,managerId:t.manager_id||null}));
+      }catch(e){
+        console.warn('teams unavailable — RBAC migration not run yet:',e&&e.message);
+        this.db.teams=[];
+      }
 
       // Brand sheets (db.infl). NOTE: these are per-brand working lists, not
       // the `influencers` master creator table — different shape entirely.
@@ -1370,31 +1409,59 @@ const App={
     await this.load();this.renderNav();this.refreshBell();
     if(this.view&&!busy)this.go(this.view);
   },
-  can(perm){const u=this.me;if(u.perms&&u.perms[perm]!==undefined&&u.perms[perm]!==null)return !!u.perms[perm];return !!(ROLE_DEFAULTS[u.role]||{})[perm];},
+  can(perm){const u=this.me;if(u.perms&&u.perms[perm]!==undefined&&u.perms[perm]!==null)return !!u.perms[perm];return !!(ROLE_DEFAULTS[roleKey(u)]||{})[perm];},
+  roleKey(u){return roleKey(u||this.me);},
+  dept(u){return deptOf(u||this.me);},
+  roleLabel(u){return ROLES[roleKey(u)]||'—';},
+  team(id){return (this.db.teams||[]).find(t=>t.id===id)||null;},
+  teamName(u){const t=this.team(u&&u.teamUid);return t?t.name:'';},
 
-  /* ===== Visibility (Stage 4) =====
-     Client-side mirror of the RLS rules in the Stage 1/2 migrations: admin
-     sees everything, everyone else sees what they own, what's assigned to
-     them, and their team's. In CLOUD mode RLS has already filtered the rows,
-     so this is defence in depth; in LOCAL mode it's the only thing enforcing
-     it. Unteamed records fall back to 'default' — the same team the
-     migrations put everybody in — so nothing changes until you actually
-     split people into teams. */
-  myTeam(){return this.me.teamId||'default';},
+  /* ===== Visibility matrix (Section A3) =====
+     Client-side mirror of the RLS policies in supabase-rbac-migration.sql.
+     In CLOUD mode RLS has already filtered the rows, so this is defence in
+     depth; in LOCAL mode it is the only thing enforcing it.
+
+       viewer               people          enquiries            requests
+       admin                everyone        all                  all
+       sales_manager        own team        own team's           own team's
+       sales_employee       own team        own                  own
+       kam_manager          own team        own team's           own team's
+       kam_employee         own team        own                  own
+       discovery_manager    own department  converted only       all
+       discovery_employee   own team        none                 assigned only  */
+  sameTeam(u){const a=this.me.teamUid,b=u&&u.teamUid;return !!a&&!!b&&a===b;},
+  visPerson(u){
+    if(!u)return false;
+    if(this.can('admin'))return true;
+    if(u.id===this.me.id)return true;
+    if(this.roleKey()==='discovery_manager')return deptOf(u)==='discovery';
+    return this.sameTeam(u);
+  },
   visReq(r){
     if(!r)return false;
     if(this.can('admin'))return true;
-    if(r.requesterId===this.me.id||r.assigneeId===this.me.id)return true;
-    return (r._teamId||this.userTeam(r.requesterId)||'default')===this.myTeam();
+    const k=this.roleKey();
+    if(k==='discovery_manager')return true;                       // all requests
+    if(k==='discovery_employee')return r.assigneeId===this.me.id; // assigned only
+    if(k==='sales_employee'||k==='kam_employee')return r.requesterId===this.me.id;
+    if(k==='sales_manager'||k==='kam_manager')
+      return r.requesterId===this.me.id||this.sameTeam(this.user(r.requesterId)||{});
+    return r.requesterId===this.me.id||r.assigneeId===this.me.id;
   },
   visEnq(e){
     if(!e)return false;
     if(this.can('admin'))return true;
-    if(e.ownerId===this.me.id)return true;
-    return (e._teamId||this.userTeam(e.ownerId)||'default')===this.myTeam();
+    const k=this.roleKey();
+    if(k==='discovery_employee')return false;                     // no enquiry access
+    if(k==='discovery_manager')return !!(e.convertedRequestId||e.status==='won');
+    if(k==='sales_employee'||k==='kam_employee')return e.ownerId===this.me.id;
+    if(k==='sales_manager'||k==='kam_manager')
+      return e.ownerId===this.me.id||this.sameTeam(this.user(e.ownerId)||{});
+    return e.ownerId===this.me.id;
   },
   myReqs(){return (this.db.reqs||[]).filter(r=>this.visReq(r));},
   myEnq(){return (this.db.enq||[]).filter(e=>this.visEnq(e));},
+  myPeople(){return (this.db.users||[]).filter(u=>this.visPerson(u));},
   effPerms(u){const base=ROLE_DEFAULTS[u.role]||{};const out={};ALL_PERMS.forEach(([k])=>{out[k]=u.perms&&u.perms[k]!==undefined&&u.perms[k]!==null?!!u.perms[k]:!!base[k];});return out;},
 
   modVisible(u,id,def){if(u&&u.mods&&Object.prototype.hasOwnProperty.call(u.mods,id))return !!u.mods[id];return !!def;},
@@ -1537,7 +1604,7 @@ const App={
     const cup=(n,suf='')=>`<span class="cup" data-to="${n}"${suf?` data-suf="${suf}"`:''}>0${suf}</span>`;
     // department lens
     let lens='';
-    if(this.me.role==='discovery'){lens=kpi(IC.disc,'#5847eb',cup(this.db.reqs.filter(r=>r.assigneeId===this.me.id&&['assigned','in_progress','rejected'].includes(r.status)).length),'Assigned to you');}
+    if(this.roleKey()==='discovery_employee'){lens=kpi(IC.disc,'#5847eb',cup(this.db.reqs.filter(r=>r.assigneeId===this.me.id&&['assigned','in_progress','rejected'].includes(r.status)).length),'Assigned to you');}
     else{lens=kpi(IC.enq,'#ff6b5d',cup(openEnq),'Open enquiries');}
     this.set(`
       <div class="grid kpis" style="margin-bottom:16px">
@@ -1549,7 +1616,7 @@ const App={
       ${(()=>{const camps=this.db.camps;const active=camps.filter(c=>c.stage==='active').length;const prof=camps.reduce((s,c)=>s+(c.sheetRows?c.sheetRows.length:0),0);const cr=this.db.reqs.filter(r=>r.campaignId).length;const brands=this.db.brands.length;const confirmed=this.db.infl.filter(i=>i.status==='confirmed').length;return `<div class="card pad" style="margin-bottom:16px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px"><div><div style="font-family:var(--disp);font-weight:600;font-size:15px">Campaign aggregation</div><div style="color:var(--muted);font-size:12.5px">Everything rolls up across campaigns & brands</div></div><button class="btn ghost sm" onclick="App.go('campaigns')">Open campaigns</button></div><div class="metric-row"><div class="m"><div class="v"><span class="cup" data-to="${brands}">0</span></div><div class="l">Brands</div></div><div class="m"><div class="v"><span class="cup" data-to="${camps.length}">0</span></div><div class="l">Campaigns</div></div><div class="m"><div class="v"><span class="cup" data-to="${active}">0</span></div><div class="l">Active</div></div><div class="m"><div class="v"><span class="cup" data-to="${cr}">0</span></div><div class="l">Linked requests</div></div><div class="m"><div class="v"><span class="cup" data-to="${prof}">0</span></div><div class="l">Profiles in sheets</div></div><div class="m"><div class="v"><span class="cup" data-to="${confirmed}">0</span></div><div class="l">Confirmed creators</div></div></div></div>`;})()}
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(230px,1fr));margin-bottom:16px">
         ${(()=>{const up=open.filter(r=>r.deadline).sort((a,b)=>a.deadline-b.deadline).slice(0,4);return `<div class="card pad"><div style="font-weight:600;font-size:13px;margin-bottom:8px">${svg(IC.clock,14)} Upcoming deadlines</div>${up.length?up.map(r=>`<div style="display:flex;justify-content:space-between;gap:8px;padding:5px 0;border-bottom:1px solid var(--line-2);cursor:pointer" onclick="App.openReq('${r.id}')"><span class="cellsub" style="flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.brandName)}</span>${this.slaChip(r)}</div>`).join(''):'<div class="cellsub">Nothing scheduled</div>'}</div>`;})()}
-        ${(()=>{const lead=this.db.users.filter(u=>u.role==='discovery').map(u=>({u,d:this.db.reqs.filter(r=>r.assigneeId===u.id&&r.status==='approved').length})).sort((a,b)=>b.d-a.d)[0];return `<div class="card pad"><div style="font-weight:600;font-size:13px;margin-bottom:8px">${svg(IC.spark,14)} Top performer</div>${lead&&lead.d?`<div style="display:flex;align-items:center;gap:10px"><span class="avatar" style="width:38px;height:38px;border-radius:10px">${initials(lead.u.name)}</span><div><div style="font-weight:600;font-size:13.5px">${esc(lead.u.name)}</div><div class="cellsub">${lead.d} delivered</div></div></div>`:'<div class="cellsub">No deliveries yet</div>'}</div>`;})()}
+        ${(()=>{const lead=this.myPeople().filter(u=>roleKey(u)==='discovery_employee').map(u=>({u,d:this.db.reqs.filter(r=>r.assigneeId===u.id&&r.status==='approved').length})).sort((a,b)=>b.d-a.d)[0];return `<div class="card pad"><div style="font-weight:600;font-size:13px;margin-bottom:8px">${svg(IC.spark,14)} Top performer</div>${lead&&lead.d?`<div style="display:flex;align-items:center;gap:10px"><span class="avatar" style="width:38px;height:38px;border-radius:10px">${initials(lead.u.name)}</span><div><div style="font-weight:600;font-size:13.5px">${esc(lead.u.name)}</div><div class="cellsub">${lead.d} delivered</div></div></div>`:'<div class="cellsub">No deliveries yet</div>'}</div>`;})()}
         ${(()=>{const ups=[...this.db.reqs].filter(r=>r.submittedAt).sort((a,b)=>b.submittedAt-a.submittedAt).slice(0,4);return `<div class="card pad"><div style="font-weight:600;font-size:13px;margin-bottom:8px">${svg(IC.up,14)} Recent uploads</div>${ups.length?ups.map(r=>`<div style="padding:5px 0;border-bottom:1px solid var(--line-2);cursor:pointer" onclick="App.openReq('${r.id}')"><div class="cellsub" style="display:flex;justify-content:space-between"><span>${esc(r.brandName)}</span><span>${this.agoStr(r.submittedAt)}</span></div></div>`).join(''):'<div class="cellsub">No uploads yet</div>'}</div>`;})()}
         ${(()=>{const bf={};this.flaggedReqs().forEach(r=>{bf[r.brandName]=(bf[r.brandName]||0)+1;});const d=Object.entries(bf).sort((a,b)=>b[1]-a[1]).slice(0,4);return `<div class="card pad"><div style="font-weight:600;font-size:13px;margin-bottom:8px">${svg(IC.bolt,14)} At-risk brands</div>${d.length?d.map(([b,n])=>`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--line-2)"><span class="cellsub">${esc(b)}</span><span class="flag"><span class="d"></span>${n}</span></div>`).join(''):'<div class="cellsub">All clear 🎉</div>'}</div>`;})()}
       </div>
@@ -1673,22 +1740,34 @@ const App={
     return {raised,assignedN:assigned.length,delivered,avgTat,rejRate:rounds?Math.round(rej/rounds*100):0,enq,active};
   },
   vTeam(){
-    let people=this.db.users.filter(u=>u.status==='active');
-    if(this._q)people=people.filter(u=>(u.name+u.email+ROLES[u.role]).toLowerCase().includes(this._q));
-    const depts=[['sales','Sales','#ff6b5d'],['kam','KAM','#2b7fff'],['discovery','Discovery','#5847eb'],['admin','Admin','#0ea472']];
+    // A3: nobody sees another department's people except Admin.
+    let people=this.db.users.filter(u=>u.status==='active'&&this.visPerson(u));
+    if(this._q)people=people.filter(u=>(u.name+u.email+this.roleLabel(u)).toLowerCase().includes(this._q));
+    const depts=DEPTS;
     const pending=this.db.users.filter(u=>u.status==='pending').length;
+    // Sales/KAM people with no team yet — surfaced for manual placement, never guessed.
+    const unassigned=people.filter(u=>!u.teamUid&&['sales','kam'].includes(deptOf(u)));
     this.set(`
-      <div class="pagehead"><div class="lead"><h2>Team & departments</h2><p>${people.length} active people across ${depts.filter(([k])=>people.some(u=>u.role===k)).length} departments${pending?` · ${pending} pending`:''}</p></div>
+      <div class="pagehead"><div class="lead"><h2>Team & departments</h2><p>${people.length} active people across ${depts.filter(([k])=>people.some(u=>deptOf(u)===k)).length} departments${pending?` · ${pending} pending`:''}</p></div>
         ${this.can('admin')?`<button class="btn primary" onclick="App.go('users')">${svg(IC.gear,15)} Manage access</button>`:''}</div>
       <div class="grid kpis" style="margin-bottom:18px">
-        ${depts.map(([k,l,c])=>{const n=people.filter(u=>u.role===k).length;return `<div class="card kpi"><div class="ic" style="background:${c}20;color:${c}">${svg(IC.people,19)}</div><div class="v"><span class="cup" data-to="${n}">0</span></div><div class="l">${l}</div></div>`;}).join('')}
+        ${depts.map(([k,l,c])=>{const n=people.filter(u=>deptOf(u)===k).length;return `<div class="card kpi"><div class="ic" style="background:${c}20;color:${c}">${svg(IC.people,19)}</div><div class="v"><span class="cup" data-to="${n}">0</span></div><div class="l">${l}</div></div>`;}).join('')}
       </div>
-      ${depts.map(([k,l,c])=>{const list=people.filter(u=>u.role===k);if(!list.length)return '';return `
+      ${unassigned.length&&this.can('admin')?`<div class="card pad" style="margin-bottom:16px;border-left:3px solid #f5a524">
+        <div style="font-weight:600;margin-bottom:4px">Unassigned — ${unassigned.length} ${unassigned.length===1?'person':'people'} without a team</div>
+        <div class="cellsub" style="margin-bottom:8px">Their team couldn't be derived from existing data, so it wasn't guessed. Assign each one from People &amp; Access.</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">${unassigned.map(u=>`<button class="btn ghost xs" onclick="App.personModal('${u.id}')">${esc(u.name)} · ${esc(this.roleLabel(u))}</button>`).join('')}</div>
+      </div>`:''}
+      ${depts.map(([k,l,c])=>{const list=people.filter(u=>deptOf(u)===k);if(!list.length)return '';
+        // Managers first, then employees — a manager belongs inside their own
+        // department and team, not in a separate bucket.
+        list.sort((a,b)=>(isMgr(b)?1:0)-(isMgr(a)?1:0)||a.name.localeCompare(b.name));
+        return `
         <div class="sec-t" style="color:${c}">${l} <span class="cellsub" style="text-transform:none;letter-spacing:0">${list.length}</span></div>
         <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(260px,1fr));margin-bottom:8px">
-        ${list.map(u=>{const s=this.personStats(u.id);const disc=u.role==='discovery';return `<div class="card pad" style="cursor:pointer" onclick="App.personModal('${u.id}')">
+        ${list.map(u=>{const s=this.personStats(u.id);const disc=deptOf(u)==='discovery';return `<div class="card pad" style="cursor:pointer" onclick="App.personModal('${u.id}')">
           <div style="display:flex;align-items:center;gap:11px"><span class="avatar" style="width:42px;height:42px;border-radius:11px;font-size:15px;background:linear-gradient(135deg,${c},${c}bb)">${initials(u.name)}</span>
-          <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:14px">${esc(u.name)}${u.locked?' <span class="badge b-active" style="font-size:9px">Admin</span>':''}</div><div class="cellsub" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(u.email)}</div></div></div>
+          <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:14px">${esc(u.name)}${isMgr(u)&&!u.locked?' <span class="badge b-review" style="font-size:9px">Manager</span>':''}${u.locked?' <span class="badge b-active" style="font-size:9px">Admin</span>':''}</div><div class="cellsub" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(this.roleLabel(u))}${this.teamName(u)?' · '+esc(this.teamName(u)):''}</div><div class="cellsub" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(u.email)}</div></div></div>
           <div class="metric-row" style="margin-top:12px">${disc?`<div class="m"><div class="v">${s.active}</div><div class="l">Active</div></div><div class="m"><div class="v">${s.delivered}</div><div class="l">Delivered</div></div><div class="m"><div class="v">${fmtDur(s.avgTat)}</div><div class="l">Avg TAT</div></div>`:`<div class="m"><div class="v">${s.raised}</div><div class="l">Requests</div></div><div class="m"><div class="v">${s.enq}</div><div class="l">Enquiries</div></div><div class="m"><div class="v">${s.delivered}</div><div class="l">Delivered</div></div>`}</div>
         </div>`;}).join('')}</div>`;}).join('')}`);
   },
@@ -1789,7 +1868,7 @@ const App={
         </tbody></table>`:this.emptyBox('No requests here','Try a different filter or raise a new request.',this.can('raise')?`<button class="btn primary" onclick="App.openNewReq()">${svg(IC.plus,16)} New request</button>`:'')}</div>`);
   },
   rsel(id){this._rsel[id]=!this._rsel[id];this.vRequests();},
-  async bulkAssign(who){const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.me.role==='sales'||this.me.role==='kam'?'a Discovery Manager':'a discovery person'),'err');const ids=Object.keys(this._rsel).filter(k=>this._rsel[k]);ids.forEach(id=>{const r=this.req(id);if(r){r.assigneeId=who;if(r.status==='draft')return;r.status='assigned';r.assignedAt=r.assignedAt||now();this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');}});await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast(ids.length+' assigned','ok');this._rsel={};this.renderNav();this.vRequests();},
+  async bulkAssign(who){const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');const ids=Object.keys(this._rsel).filter(k=>this._rsel[k]);ids.forEach(id=>{const r=this.req(id);if(r){r.assigneeId=who;if(r.status==='draft')return;r.status='assigned';r.assignedAt=r.assignedAt||now();this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');}});await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast(ids.length+' assigned','ok');this._rsel={};this.renderNav();this.vRequests();},
   async bulkPriority(p){const ids=Object.keys(this._rsel).filter(k=>this._rsel[k]);ids.forEach(id=>{const r=this.req(id);if(r)r.priority=p;});await this.save('reqs');this.toast(ids.length+' updated','ok');this._rsel={};this.renderNav();this.vRequests();},
   exportReqsSel(){const ids=Object.keys(this._rsel).filter(k=>this._rsel[k]);this.export(this.db.reqs.filter(r=>ids.includes(r.id)).map(r=>({ID:r.id,Brand:r.brandName,Niche:r.niche,Priority:r.priority,Flags:this.flags(r).join('; '),Status:r.status,Discovery:this.user(r.assigneeId)?.name||'',Rounds:r.rounds.length})),'requests_selected.xlsx');},
   exportReqs(){this.export(this.myReqs().filter(r=>r.status!=='draft').map(r=>({ID:r.id,Brand:r.brandName,Niche:r.niche,Type:r.reqType,Round:r.round,Requester:this.user(r.requesterId)?.name,Discovery:this.user(r.assigneeId)?.name||'',FollowersMin:r.fMin,FollowersMax:r.fMax,Platform:r.platform,Qty:r.qty,Rounds:r.rounds.length,Rejections:r.rounds.filter(x=>x.decision==='rejected').length,Status:r.status,Deadline:r.deadline?fmtDate(r.deadline):'',TurnaroundH:durH(r.assignedAt,r.submittedAt)})),'requests.xlsx');},
@@ -2042,22 +2121,26 @@ const App={
     setTimeout(()=>this.openReq(id),100);
   },
   exportRound(id,i){const r=this.req(id),rd=r.rounds[i],d=rd.decisions||{};const out=rd.rows.map((row,ri)=>({...row,Decision:(d[ri]||{}).status||'',Feedback:(d[ri]||{}).fb||''}));this.export(out,`${r.id}_round${rd.round}.xlsx`);},
+  /* B6 — assignment is two hops and the dropdown must reflect exactly one of
+     them. Hop 1: Sales/KAM -> Discovery Manager ONLY (no discovery employee
+     may appear here at all). Hop 2: Discovery Manager/Admin -> Discovery
+     Employee. Enforced server-side too; this is only what gets listed. */
   assignTargets(){
     const active=this.db.users.filter(u=>u.status==='active');
-    const r=this.me.role;
-    // Sales & KAM may only hand off to a Discovery Manager — the manager then routes onward.
-    if(r==='sales'||r==='kam')return active.filter(u=>u.role==='manager');
-    // Managers & Admin route to the people who actually do discovery.
-    if(r==='manager'||r==='admin'||this.can('admin'))return active.filter(u=>['discovery','manager'].includes(u.role));
-    return active.filter(u=>u.role==='discovery');
+    const k=this.roleKey();
+    if(['sales_manager','sales_employee','kam_manager','kam_employee'].includes(k))
+      return active.filter(u=>roleKey(u)==='discovery_manager');
+    if(k==='discovery_manager'||k==='admin'||this.can('admin'))
+      return active.filter(u=>roleKey(u)==='discovery_employee');
+    return [];
   },
   assignHint(){
-    const r=this.me.role;
-    if(r==='sales'||r==='kam')return 'Sales & KAM assign to a Discovery Manager, who then routes it to the right person.';
-    if(r==='manager')return 'As a Discovery Manager you route this to a discovery person (or take it yourself).';
+    const k=this.roleKey();
+    if(k.startsWith('sales')||k.startsWith('kam'))return 'Sales & KAM assign to a Discovery Manager, who then routes it to the right person.';
+    if(k==='discovery_manager')return 'As a Discovery Manager you route this to a Discovery Employee.';
     return 'Pick who delivers this brief.';
   },
-  async assignReq(id){const r=this.req(id);const who=document.getElementById('assignSel').value;const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.me.role==='sales'||this.me.role==='kam'?'a Discovery Manager':'a discovery person'),'err');r.assigneeId=who;r.status='assigned';r.assignedAt=now();this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');await this.notify(who,'Request assigned to you',`${r.id} · ${r.brandName}`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned ${r.id}`,body:`You've been assigned ${r.id} (${r.brandName}).`});await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Assigned','ok');this.renderNav();this.openReq(id);},
+  async assignReq(id){const r=this.req(id);const who=document.getElementById('assignSel').value;const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');r.assigneeId=who;r.status='assigned';r.assignedAt=now();this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');await this.notify(who,'Request assigned to you',`${r.id} · ${r.brandName}`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned ${r.id}`,body:`You've been assigned ${r.id} (${r.brandName}).`});await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Assigned','ok');this.renderNav();this.openReq(id);},
   async publishDraft(id){const r=this.req(id);r.status='assigned';this.pushEvent(r,'Request published','create');await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Published','ok');this.renderNav();this.openReq(id);},
   async startWork(id){const r=this.req(id);r.status='in_progress';r.startedAt=now();this.pushEvent(r,'Started discovery','info');await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Marked in discovery','ok');this.openReq(id);},
   wireDrop(id){const dz=document.getElementById('dropZone');if(!dz)return;['dragover','dragenter'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.add('drag');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.remove('drag');}));dz.addEventListener('drop',ev=>{const f=ev.dataTransfer.files[0];if(f)this.parseSheet(f,id);});},
@@ -3950,7 +4033,7 @@ const App={
     const u=this.user(id),eff=this.effPerms(u);
     this.modal(`<div class="mhead"><div><h3>Permissions · ${esc(u.name)}</h3><p>Role default is <b>${ROLES[u.role]}</b> — override any switch below</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div>
       <div class="mbody">
-        <div class="field"><label>Department / role</label><select class="inp" id="pr_role" onchange="App.previewRole('${id}',this.value)">${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${u.role===k?'selected':''}>${v}</option>`).join('')}</select></div>
+        <div class="field"><label>Department / role</label><select class="inp" id="pr_role" onchange="App.previewRole('${id}',this.value)">${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${roleKey(u)===k?'selected':''}>${v}</option>`).join('')}</select></div>
         <div class="sec-t">Capabilities</div>
         <div id="permList">${ALL_PERMS.map(([k,l])=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line-2)"><div><div style="font-weight:500">${l}</div></div><div class="toggle ${eff[k]?'on':''}" data-k="${k}" onclick="this.classList.toggle('on')"></div></div>`).join('')}</div>
       </div>
@@ -3958,7 +4041,7 @@ const App={
   },
   previewRole(id,role){const base=ROLE_DEFAULTS[role]||{};document.querySelectorAll('#permList .toggle').forEach(t=>t.classList.toggle('on',!!base[t.dataset.k]));},
   liveAdmins(){return this.db.users.filter(u=>u.status==='active'&&this.effPerms(u).admin);},
-  async savePerms(id){const u=this.user(id);if(u.locked)return this.toast('The permanent admin can\'t be changed','err');const newRole=document.getElementById('pr_role').value;const perms={};document.querySelectorAll('#permList .toggle').forEach(t=>{perms[t.dataset.k]=t.classList.contains('on')?1:0;});const wouldLoseAdmin=this.effPerms(u).admin&&!perms.admin;if(wouldLoseAdmin&&this.liveAdmins().length<=1)return this.toast('You can\'t remove the last admin','err');u.role=newRole;u.perms=perms;if(CLOUD){this._lastLocalSave=Date.now();try{const {data,error}=await SB.from('profiles').update({role:newRole,perms}).eq('id',id).select('id');if(error)throw error;if(!data||!data.length){return this.adminBlocked();}}catch(e){console.error(e);return this.toast('Update failed: '+(e.message||e),'err');}}else{await this.save('users');}this.closeAll();this.toast('Permissions updated','ok');this.vUsers();},
+  async savePerms(id){const u=this.user(id);if(u.locked)return this.toast('The permanent admin can\'t be changed','err');const newRole=document.getElementById('pr_role').value;const perms={};document.querySelectorAll('#permList .toggle').forEach(t=>{perms[t.dataset.k]=t.classList.contains('on')?1:0;});const wouldLoseAdmin=this.effPerms(u).admin&&!perms.admin;if(wouldLoseAdmin&&this.liveAdmins().length<=1)return this.toast('You can\'t remove the last admin','err');u.roleKey=newRole;u.role=LEGACY_ROLE[newRole]||u.role;u.perms=perms;if(CLOUD){this._lastLocalSave=Date.now();try{const {data,error}=await SB.from('profiles').update({role_key:newRole,role:LEGACY_ROLE[newRole]||null,perms}).eq('id',id).select('id');if(error)throw error;if(!data||!data.length){return this.adminBlocked();}}catch(e){console.error(e);return this.toast('Update failed: '+(e.message||e),'err');}}else{await this.save('users');}this.closeAll();this.toast('Permissions updated','ok');this.vUsers();},
   async setUser(id,status){const u=this.user(id);if(u.locked&&status!=='active')return this.toast('The permanent admin can\'t be disabled','err');if(status!=='active'&&this.effPerms(u).admin&&this.liveAdmins().length<=1)return this.toast('You can\'t disable the last admin','err');u.status=status;if(CLOUD){this._lastLocalSave=Date.now();try{const {data,error}=await SB.from('profiles').update({status}).eq('id',id).select('id');if(error)throw error;if(!data||!data.length){u.status=(status==='active'?'pending':u.status);return this.adminBlocked();}}catch(e){console.error(e);return this.toast('Update failed: '+(e.message||e),'err');}}else{await this.save('users');}if(status==='active')await this.notify(id,'Account approved ✅','Your DiscoverDesk access is now active. Welcome aboard.','approve',{pref:'account',subject:'[DiscoverDesk] Access approved',body:'Your account has been approved — you can now sign in.'});this.toast(status==='active'?'Account approved':status==='disabled'?'Account disabled':'Updated','ok');this.renderNav();this.vUsers();},
   adminBlocked(){this.modal(`<div class="mhead"><div><h3>Database didn't allow that</h3><p>Your login isn't recognised as an admin in Supabase</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div><div class="mbody"><div class="notice" style="background:var(--danger-soft);border-color:#f5cccc;color:#b3282d">${svg(IC.bolt,16)}<div>The change was blocked by row-level security because your profile row isn't marked <b>admin+active</b> in the database (this happens if the SQL was run after you first signed up).</div></div><p style="margin:14px 0 6px;font-weight:600">One-time fix — run this in Supabase → SQL editor:</p><pre style="background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:12px;font-family:var(--mono);font-size:12px;white-space:pre-wrap">update public.profiles
 set role='admin', status='active', locked=true
