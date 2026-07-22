@@ -29,6 +29,8 @@
 
 
 
+
+
 -- ############################################################
 -- ## supabase-requests-migration.sql
 -- ## Stage 1 - requests table + profiles.team_id
@@ -129,7 +131,10 @@ create policy req_delete on public.requests for delete using (
 );
 
 -- 5) Realtime — index.html listens on this table directly
-alter publication supabase_realtime add table public.requests;
+do $$ begin
+  alter publication supabase_realtime add table public.requests;
+exception when duplicate_object then null;
+end $$;
 
 -- 6) ONE-TIME MIGRATION — copy requests out of the kv blob.
 --    Safe to run more than once: existing rows are refreshed, not duplicated.
