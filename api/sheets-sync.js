@@ -60,6 +60,10 @@ module.exports = async (req, res) => {
   const sb = createClient(url, key);
   const sheets = sheetsClient();
   const SHEET_ID = process.env.SHEET_ID, RANGE = process.env.SHEET_RANGE || 'Roster!A1:Z';
+  console.log("===== SHEETS CONFIG =====");
+  console.log("SHEET_ID:", SHEET_ID);
+  console.log("RANGE:", RANGE);
+  console.log("=========================");
   const action = (req.method === 'GET') ? 'both' : ((req.body && req.body.action) || 'pull');
 
   try {

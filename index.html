@@ -894,7 +894,7 @@ const App={
     await this.load();
     this.enter();
   },
-  mapProfile(p){return {id:p.id,name:p.name,email:p.email,role:p.role,status:p.status,locked:!!p.locked,perms:p.perms||null,emailPrefs:p.email_prefs||{assigned:1,submitted:1,decision:1,account:1},createdAt:p.created_at?new Date(p.created_at).getTime():now()};},
+  mapProfile(p){return {id:p.id,name:p.name,email:p.email,role:p.role,status:p.status,locked:!!p.locked,perms:p.perms||null,teamId:p.team_id||null,emailPrefs:p.email_prefs||{assigned:1,submitted:1,decision:1,account:1},createdAt:p.created_at?new Date(p.created_at).getTime():now()};},
   async loadProfiles(){try{const {data}=await SB.from('profiles').select('*');return (data||[]).map(p=>this.mapProfile(p));}catch(e){console.error('loadProfiles',e);return this.db.users||[];}},
   async load(){
     if(CLOUD){
@@ -920,9 +920,28 @@ const App={
         this.db.infl = [];
       }
 
+      // Load requests directly from SQL (role/team isolation enforced via RLS)
+      try{
+        const { data, error } = await SB
+          .from('requests')
+          .select('*')
+          .order('created_at', { ascending:true });
+
+        if(error){
+          console.error(error);
+          this.db.reqs = [];
+        }else{
+          this.db.reqs = (data||[]).map(row=>({...row.data, id:row.id}));
+        }
+      }catch(e){
+        console.error(e);
+        this.db.reqs = [];
+      }
+      this._reqIds = new Set(this.db.reqs.map(r=>r.id));
+
       // Load everything else from KV
       for(const k in K){
-        if(k==='seq' || k==='users' || k==='infl') continue;
+        if(k==='seq' || k==='users' || k==='infl' || k==='reqs') continue;
         this.db[k]=await store.get(K[k])||[];
       }
 
@@ -939,7 +958,39 @@ const App={
     this._settings=await store.get('dd:settings')||{};
     this._clive=await store.get('dd:clive')||{};
      },
-  async save(what){this._cidx=null;const map={users:K.users,brands:K.brands,reqs:K.reqs,camps:K.camps,acts:K.acts,infl:K.infl,enq:K.enq,notif:K.notif,roster:K.roster};if(what)await store.set(map[what],this.db[what]);else for(const k in map)await store.set(map[k],this.db[k]);},
+  async save(what){
+    this._cidx=null;this._lastLocalSave=Date.now();
+    const map={users:K.users,brands:K.brands,reqs:K.reqs,camps:K.camps,acts:K.acts,infl:K.infl,enq:K.enq,notif:K.notif,roster:K.roster};
+    const keys=what?[what]:Object.keys(map);
+    for(const k of keys){
+      if(k==='reqs' && CLOUD){ await this.saveReqsCloud(); continue; }
+      await store.set(map[k],this.db[k]);
+    }
+    this._lastLocalSave=Date.now();
+  },
+  userTeam(id){const u=this.user(id);return (u&&u.teamId)||null;},
+  async saveReqsCloud(){
+    const currentIds=new Set(this.db.reqs.map(r=>r.id));
+    const removed=[...(this._reqIds||[])].filter(id=>!currentIds.has(id));
+    try{
+      if(this.db.reqs.length){
+        const rows=this.db.reqs.map(r=>({
+          id:r.id,
+          team_id:this.userTeam(r.requesterId)||this.me.teamId||'default',
+          owner_id:r.requesterId||null,
+          assignee_id:r.assigneeId||null,
+          data:r,
+        }));
+        const {error}=await SB.from('requests').upsert(rows);
+        if(error)console.error('saveReqsCloud upsert',error);
+      }
+      if(removed.length){
+        const {error}=await SB.from('requests').delete().in('id',removed);
+        if(error)console.error('saveReqsCloud delete',error);
+      }
+      this._reqIds=currentIds;
+    }catch(e){ console.error('saveReqsCloud',e); }
+  },
   async nextSeq(pfx){let s=await store.get(K.seq)||{};s[pfx]=(s[pfx]||0)+1;await store.set(K.seq,s);return pfx+'-'+String(s[pfx]).padStart(4,'0');},
 
   async seed(){
@@ -1178,12 +1229,14 @@ const App={
       this._liveSub=SB.channel('dd-live')
         .on('postgres_changes',{event:'*',schema:'public',table:'kv'},()=>{this._liveDirty=true;this.maybeRefresh();})
         .on('postgres_changes',{event:'*',schema:'public',table:'profiles'},()=>{this._liveDirty=true;this.maybeRefresh();})
+        .on('postgres_changes',{event:'*',schema:'public',table:'requests'},()=>{this._liveDirty=true;this.maybeRefresh();})
         .subscribe();
       setInterval(()=>this.maybeRefresh(),9000);
     }catch(e){console.error('realtime',e);}
   },
   async maybeRefresh(){
     if(!this._liveDirty)return;
+    if(this._lastLocalSave&&(Date.now()-this._lastLocalSave)<6000)return;
     const busy=document.getElementById('modal').classList.contains('on')||document.getElementById('drawer').classList.contains('on');
     const typing=['INPUT','TEXTAREA','SELECT'].includes(document.activeElement&&document.activeElement.tagName);
     if(busy||typing)return;
@@ -1257,10 +1310,10 @@ const App={
   async saveModuleAccess(uid){
     const u=this.user(uid);const MODS=['dashboard','requests','discovery','review','enquiries','board','campaigns','roster','bridge','creators','influencers','clientview','exec','reports','activity','inbox','team','integrations'];
     u.mods={};MODS.forEach(id=>{const el=document.getElementById('mod_'+id);if(el)u.mods[id]=el.checked?1:0;});
-    if(CLOUD){try{await SB.from('profiles').update({mods:u.mods}).eq('id',uid);}catch(e){}}else{await this.save('users');}
+    if(CLOUD){this._lastLocalSave=Date.now();try{await SB.from('profiles').update({mods:u.mods}).eq('id',uid);}catch(e){}}else{await this.save('users');}
     this.toast('Module access updated','ok');this.closeAll();if(uid===this.me.id){this.me.mods=u.mods;this.renderNav();}
   },
-  async resetModuleAccess(uid){const u=this.user(uid);delete u.mods;if(CLOUD){try{await SB.from('profiles').update({mods:null}).eq('id',uid);}catch(e){}}else{await this.save('users');}this.toast('Reset to role defaults','ok');this.moduleAccessModal(uid);if(uid===this.me.id)this.renderNav();},
+  async resetModuleAccess(uid){const u=this.user(uid);delete u.mods;if(CLOUD){this._lastLocalSave=Date.now();try{await SB.from('profiles').update({mods:null}).eq('id',uid);}catch(e){}}else{await this.save('users');}this.toast('Reset to role defaults','ok');this.moduleAccessModal(uid);if(uid===this.me.id)this.renderNav();},
   go(v){
     this.view=v;
     document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
@@ -3673,7 +3726,7 @@ const App={
     const row=(k,l)=>`<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line-2)"><div style="font-weight:500">${l}</div><div class="toggle ${p[k]!==0?'on':''}" onclick="App.togglePref('${k}',this)"></div></div>`;
     this.modal(`<div class="mhead"><div><h3>Email settings</h3><p>Choose which events email you</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div><div class="mbody">${row('assigned','When a request is assigned to me')}${row('submitted','When profiles are submitted for my review')}${row('decision','When my submission is approved or rejected')}${row('account','Account & access changes')}<div class="notice" style="margin-top:16px">${svg(IC.bolt,16)}<div>These control the email drafts prepared for you. Real automatic delivery is enabled in the hosted version.</div></div></div><div class="mfoot"><button class="btn primary" onclick="App.closeAll()">Done</button></div>`);
   },
-  async togglePref(k,el){const p=this.me.emailPrefs=this.me.emailPrefs||{};p[k]=p[k]===0?1:0;el.classList.toggle('on',p[k]!==0);if(CLOUD){try{await SB.from('profiles').update({email_prefs:p}).eq('id',this.me.id);}catch(e){console.error(e);}}else{await this.save('users');}},
+  async togglePref(k,el){const p=this.me.emailPrefs=this.me.emailPrefs||{};p[k]=p[k]===0?1:0;el.classList.toggle('on',p[k]!==0);if(CLOUD){this._lastLocalSave=Date.now();try{await SB.from('profiles').update({email_prefs:p}).eq('id',this.me.id);}catch(e){console.error(e);}}else{await this.save('users');}},
 
   /* ================= ACTIVITY ================= */
   vActivity(){
@@ -3733,8 +3786,8 @@ const App={
   },
   previewRole(id,role){const base=ROLE_DEFAULTS[role]||{};document.querySelectorAll('#permList .toggle').forEach(t=>t.classList.toggle('on',!!base[t.dataset.k]));},
   liveAdmins(){return this.db.users.filter(u=>u.status==='active'&&this.effPerms(u).admin);},
-  async savePerms(id){const u=this.user(id);if(u.locked)return this.toast('The permanent admin can\'t be changed','err');const newRole=document.getElementById('pr_role').value;const perms={};document.querySelectorAll('#permList .toggle').forEach(t=>{perms[t.dataset.k]=t.classList.contains('on')?1:0;});const wouldLoseAdmin=this.effPerms(u).admin&&!perms.admin;if(wouldLoseAdmin&&this.liveAdmins().length<=1)return this.toast('You can\'t remove the last admin','err');u.role=newRole;u.perms=perms;if(CLOUD){try{const {data,error}=await SB.from('profiles').update({role:newRole,perms}).eq('id',id).select('id');if(error)throw error;if(!data||!data.length){return this.adminBlocked();}}catch(e){console.error(e);return this.toast('Update failed: '+(e.message||e),'err');}}else{await this.save('users');}this.closeAll();this.toast('Permissions updated','ok');this.vUsers();},
-  async setUser(id,status){const u=this.user(id);if(u.locked&&status!=='active')return this.toast('The permanent admin can\'t be disabled','err');if(status!=='active'&&this.effPerms(u).admin&&this.liveAdmins().length<=1)return this.toast('You can\'t disable the last admin','err');u.status=status;if(CLOUD){try{const {data,error}=await SB.from('profiles').update({status}).eq('id',id).select('id');if(error)throw error;if(!data||!data.length){u.status=(status==='active'?'pending':u.status);return this.adminBlocked();}}catch(e){console.error(e);return this.toast('Update failed: '+(e.message||e),'err');}}else{await this.save('users');}if(status==='active')await this.notify(id,'Account approved ✅','Your DiscoverDesk access is now active. Welcome aboard.','approve',{pref:'account',subject:'[DiscoverDesk] Access approved',body:'Your account has been approved — you can now sign in.'});this.toast(status==='active'?'Account approved':status==='disabled'?'Account disabled':'Updated','ok');this.renderNav();this.vUsers();},
+  async savePerms(id){const u=this.user(id);if(u.locked)return this.toast('The permanent admin can\'t be changed','err');const newRole=document.getElementById('pr_role').value;const perms={};document.querySelectorAll('#permList .toggle').forEach(t=>{perms[t.dataset.k]=t.classList.contains('on')?1:0;});const wouldLoseAdmin=this.effPerms(u).admin&&!perms.admin;if(wouldLoseAdmin&&this.liveAdmins().length<=1)return this.toast('You can\'t remove the last admin','err');u.role=newRole;u.perms=perms;if(CLOUD){this._lastLocalSave=Date.now();try{const {data,error}=await SB.from('profiles').update({role:newRole,perms}).eq('id',id).select('id');if(error)throw error;if(!data||!data.length){return this.adminBlocked();}}catch(e){console.error(e);return this.toast('Update failed: '+(e.message||e),'err');}}else{await this.save('users');}this.closeAll();this.toast('Permissions updated','ok');this.vUsers();},
+  async setUser(id,status){const u=this.user(id);if(u.locked&&status!=='active')return this.toast('The permanent admin can\'t be disabled','err');if(status!=='active'&&this.effPerms(u).admin&&this.liveAdmins().length<=1)return this.toast('You can\'t disable the last admin','err');u.status=status;if(CLOUD){this._lastLocalSave=Date.now();try{const {data,error}=await SB.from('profiles').update({status}).eq('id',id).select('id');if(error)throw error;if(!data||!data.length){u.status=(status==='active'?'pending':u.status);return this.adminBlocked();}}catch(e){console.error(e);return this.toast('Update failed: '+(e.message||e),'err');}}else{await this.save('users');}if(status==='active')await this.notify(id,'Account approved ✅','Your DiscoverDesk access is now active. Welcome aboard.','approve',{pref:'account',subject:'[DiscoverDesk] Access approved',body:'Your account has been approved — you can now sign in.'});this.toast(status==='active'?'Account approved':status==='disabled'?'Account disabled':'Updated','ok');this.renderNav();this.vUsers();},
   adminBlocked(){this.modal(`<div class="mhead"><div><h3>Database didn't allow that</h3><p>Your login isn't recognised as an admin in Supabase</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div><div class="mbody"><div class="notice" style="background:var(--danger-soft);border-color:#f5cccc;color:#b3282d">${svg(IC.bolt,16)}<div>The change was blocked by row-level security because your profile row isn't marked <b>admin+active</b> in the database (this happens if the SQL was run after you first signed up).</div></div><p style="margin:14px 0 6px;font-weight:600">One-time fix — run this in Supabase → SQL editor:</p><pre style="background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:12px;font-family:var(--mono);font-size:12px;white-space:pre-wrap">update public.profiles
 set role='admin', status='active', locked=true
 where email = '${esc(this.me.email||'you@yourcompany.com')}';</pre><p class="cellsub" style="margin-top:8px">Then sign out and back in, and approvals & permissions will work. Full re-runnable policies are in <b>supabase-admin-fix.sql</b>.</p></div><div class="mfoot"><button class="btn primary" onclick="App.closeAll()">Got it</button></div>`);},
