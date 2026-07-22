@@ -537,7 +537,12 @@ body.dark #fs .fsbar{background:rgba(24,24,36,.82)}
 /* content calendar */
 .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
 .cal-dow{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;text-align:center;padding:4px 0}
-.cal-cell{min-height:92px;border:1px solid var(--line);border-radius:10px;padding:6px;background:var(--surface);display:flex;flex-direction:column;gap:3px}
+.cal-cell{min-height:92px;border:1px solid var(--line);border-radius:10px;padding:6px;background:var(--surface);display:flex;flex-direction:column;gap:3px;position:relative;transition:box-shadow .15s}
+/* D17 — "+N more" is a real control, and hovering a busy day lifts the cell
+   for a compact preview instead of hard-truncating at four events. */
+.cal-more{font-size:10px;font-weight:600;color:var(--primary);cursor:pointer;padding:1px 3px;border-radius:4px}
+.cal-more:hover{background:var(--primary-soft);text-decoration:underline}
+.cal-cell:hover{z-index:3;box-shadow:var(--shadow-lg)}
 .cal-cell.empty{background:transparent;border:none}
 .cal-cell.today{border-color:var(--primary);box-shadow:0 0 0 1px var(--primary)}
 .cal-cell.conflict{background:var(--danger-soft)}
@@ -999,7 +1004,7 @@ const App={
       // Requests (role/team isolation enforced via RLS)
       try{
         const rows=await this.fetchAll('requests');
-        this.db.reqs = rows.map(row=>({...row.data, id:row.id, _teamId:row.team_id}));
+        this.db.reqs = rows.map(row=>({...row.data, id:row.id, _teamId:row.team_id, deletedAt:row.deleted_at?new Date(row.deleted_at).getTime():null, deletedBy:row.deleted_by||null}));
         this._kvFb.reqs=false;
       }catch(e){
         console.warn('requests unavailable — using kv fallback:',e&&e.message);
@@ -1011,7 +1016,7 @@ const App={
       // Enquiries (role/team isolation enforced via RLS)
       try{
         const rows=await this.fetchAll('enquiries');
-        this.db.enq = rows.map(row=>({...row.data, id:row.id, _teamId:row.team_id}));
+        this.db.enq = rows.map(row=>({...row.data, id:row.id, _teamId:row.team_id, deletedAt:row.deleted_at?new Date(row.deleted_at).getTime():null, deletedBy:row.deleted_by||null}));
         this._kvFb.enq=false;
       }catch(e){
         console.warn('enquiries unavailable — using kv fallback:',e&&e.message);
@@ -1075,7 +1080,7 @@ const App={
   },
   userTeam(id){const u=this.user(id);return (u&&u.teamId)||null;},
   // Strip the client-only mirror columns before writing a row's JSON back.
-  stripMeta(o){const c={...o};delete c._teamId;return c;},
+  stripMeta(o){const c={...o};delete c._teamId;delete c.deletedAt;delete c.deletedBy;return c;},
   async saveReqsCloud(){
     const currentIds=new Set(this.db.reqs.map(r=>r.id));
     const removed=[...(this._reqIds||[])].filter(id=>!currentIds.has(id));
@@ -1514,6 +1519,7 @@ const App={
     const META={
       mission:{ic:IC.spark,t:'Mission Control'},
       audit:{ic:IC.report,t:'Audit Log',admin:1},
+      deleted:{ic:IC.trash||IC.x,t:'Deleted',admin:1},
       dsearch:{ic:IC.disc,t:'Discovery Search'},
       calendar:{ic:IC.dash,t:'Content Calendar'},
       dashboard:{ic:IC.dash,t:'Overview'},
@@ -1548,7 +1554,7 @@ const App={
     document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===this.view));
     if(this.me)this.refreshBell();
   },
-  renderMe(){document.getElementById('meBox').innerHTML=`<div class="avatar">${initials(this.me.name)}</div><div class="info"><div class="n">${esc(this.me.name)}</div><div class="r">${ROLES[this.me.role]}</div></div><button title="Sign out" onclick="App.logout()">${svg(IC.x,16)}</button>`;},
+  renderMe(){document.getElementById('meBox').innerHTML=`<div class="avatar">${initials(this.me.name)}</div><div class="info"><div class="n">${esc(this.me.name)}</div><div class="r">${ROLES[roleKey(this.me)]}</div></div><button title="Sign out" onclick="App.logout()">${svg(IC.x,16)}</button>`;},
   refreshBell(){const u=this.db.notif.filter(n=>n.to===this.me.id&&!n.read).length;const d=document.getElementById('bellDot');if(d){d.style.display=u?'grid':'none';d.textContent=u>9?'9+':u;}const rc=this.redCount?this.redCount():0;const rd=document.getElementById('redDot');const rb=document.getElementById('redBtn');if(rd){rd.style.display=rc?'grid':'none';rd.textContent=rc>9?'9+':rc;}if(rb)rb.style.display=(this.can('review')||this.can('assign'))?'grid':'none';},
   moduleAccessModal(uid){
     if(!this.can('admin'))return;
@@ -1594,9 +1600,9 @@ const App={
     this.view=v;
     document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
     document.getElementById('side').classList.remove('open');
-    const T={mission:['Mission Control','Your live discovery operation'],pool:['Campaign Pool','Build a creator pool per campaign'],audit:['Audit Log','Who did what, to the second'],dsearch:['Discovery Search','Natural-language creator search'],calendar:['Content Calendar','Deadlines & campaign dates'],shortlist:['Shortlist Builder','Drag creators into match-scored groups'],compare:['Creator Comparison','Creators side by side'],dashboard:['Overview','Your department at a glance'],exec:['Dashboards','Executive views by role'],accessmap:['Who sees what','Module visibility by role & permission'],modulemap:['Module map','How every module connects — click any tile to see what it does'],board:['Board','Drag requests through the pipeline'],enquiries:['Enquiries','New business logged by Sales & KAM'],requests:['Requests','Discovery requests across brands'],discovery:['My Discovery','Requests assigned to you'],review:['Review Queue','Submissions waiting on you'],influencers:['Brand Sheets','A live influencer roster per brand'],creators:['Influencer 360','Every creator across all brands, rounds & pricing'],roster:['Roster','Your master influencer database · bulk upload & brand cost'],bridge:['Roster Bridge','Internal cost vs brand cost · live P&L'],clientview:['Client View','Client-safe view of selected creators'],campaigns:['Campaigns','One live sheet per campaign'],team:['Team','Your departments and who does what'],reports:['Reports','Performance, workload & exports'],inbox:['Inbox','Notifications & email drafts'],activity:['Activity','Everything that happened'],users:['People & Access','Accounts, roles & permissions'],integrations:['Integrations','Connect Meta / Instagram & live data']};
+    const T={mission:['Mission Control','Your live discovery operation'],pool:['Campaign Pool','Build a creator pool per campaign'],audit:['Audit Log','Who did what, to the second'],deleted:['Deleted','Recoverable for 30 days'],dsearch:['Discovery Search','Natural-language creator search'],calendar:['Content Calendar','Deadlines & campaign dates'],shortlist:['Shortlist Builder','Drag creators into match-scored groups'],compare:['Creator Comparison','Creators side by side'],dashboard:['Overview','Your department at a glance'],exec:['Dashboards','Executive views by role'],accessmap:['Who sees what','Module visibility by role & permission'],modulemap:['Module map','How every module connects — click any tile to see what it does'],board:['Board','Drag requests through the pipeline'],enquiries:['Enquiries','New business logged by Sales & KAM'],requests:['Requests','Discovery requests across brands'],discovery:['My Discovery','Requests assigned to you'],review:['Review Queue','Submissions waiting on you'],influencers:['Brand Sheets','A live influencer roster per brand'],creators:['Influencer 360','Every creator across all brands, rounds & pricing'],roster:['Roster','Your master influencer database · bulk upload & brand cost'],bridge:['Roster Bridge','Internal cost vs brand cost · live P&L'],clientview:['Client View','Client-safe view of selected creators'],campaigns:['Campaigns','One live sheet per campaign'],team:['Team','Your departments and who does what'],reports:['Reports','Performance, workload & exports'],inbox:['Inbox','Notifications & email drafts'],activity:['Activity','Everything that happened'],users:['People & Access','Accounts, roles & permissions'],integrations:['Integrations','Connect Meta / Instagram & live data']};
     document.getElementById('pageTitle').textContent=T[v][0];document.getElementById('pageCrumb').textContent=T[v][1];
-    ({mission:this.vMission,audit:this.vAudit,pool:this.vPool,dsearch:this.vDiscoverySearch,calendar:this.vCalendar,shortlist:this.vShortlist,compare:this.vCompare,dashboard:this.vDashboard,exec:this.vExec,accessmap:this.vAccessMap,modulemap:this.vModuleMap,board:this.vBoard,enquiries:this.vEnquiries,requests:this.vRequests,discovery:this.vDiscovery,review:this.vReview,influencers:this.vInfluencers,creators:this.vCreators,roster:this.vRoster,bridge:this.vBridge,clientview:this.vClientView,campaigns:this.vCampaigns,team:this.vTeam,reports:this.vReports,inbox:this.vInbox,activity:this.vActivity,users:this.vUsers,integrations:this.vIntegrations})[v].call(this);
+    ({mission:this.vMission,audit:this.vAudit,deleted:this.vDeleted,pool:this.vPool,dsearch:this.vDiscoverySearch,calendar:this.vCalendar,shortlist:this.vShortlist,compare:this.vCompare,dashboard:this.vDashboard,exec:this.vExec,accessmap:this.vAccessMap,modulemap:this.vModuleMap,board:this.vBoard,enquiries:this.vEnquiries,requests:this.vRequests,discovery:this.vDiscovery,review:this.vReview,influencers:this.vInfluencers,creators:this.vCreators,roster:this.vRoster,bridge:this.vBridge,clientview:this.vClientView,campaigns:this.vCampaigns,team:this.vTeam,reports:this.vReports,inbox:this.vInbox,activity:this.vActivity,users:this.vUsers,integrations:this.vIntegrations})[v].call(this);
   },
   set(h){const c=document.getElementById('content');c.innerHTML=h;c.classList.remove('view-in');void c.offsetWidth;c.classList.add('view-in');this.animateCounts();this.animateProgress&&this.animateProgress();this.startDeadlineTicks&&this.startDeadlineTicks();},
   user(id){return this.db.users.find(u=>u.id===id);},
@@ -1814,7 +1820,7 @@ const App={
     const u=this.user(id);const s=this.personStats(id);
     const acts=this.db.acts.filter(a=>a.by===id).slice(0,8);
     const spec=(k,v)=>`<div class="s"><div class="k">${k}</div><div class="v">${v}</div></div>`;
-    this.drawer(`<div class="dt-top"><div style="display:flex;justify-content:space-between"><div class="dt-meta"><span class="avatar" style="width:40px;height:40px;border-radius:11px">${initials(u.name)}</span></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div><div class="dt-title">${esc(u.name)}</div><div class="dt-sub">${ROLES[u.role]} · ${esc(u.email)}</div></div>
+    this.drawer(`<div class="dt-top"><div style="display:flex;justify-content:space-between"><div class="dt-meta"><span class="avatar" style="width:40px;height:40px;border-radius:11px">${initials(u.name)}</span></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div><div class="dt-title">${esc(u.name)}</div><div class="dt-sub">${ROLES[roleKey(u)]} · ${esc(u.email)}</div></div>
       <div class="mbody">
         <div class="specgrid">${spec('Requests raised',s.raised)}${spec('Enquiries owned',s.enq)}${spec('Assigned to them',s.assignedN)}${spec('Delivered',s.delivered)}${spec('Avg turnaround',fmtDur(s.avgTat))}${spec('Rejection rate',s.rejRate+'%')}</div>
         ${this.can('admin')?(()=>{const primary=this.isPrimary(u);const self=u.id===this.me.id;return `<div class="actbar">${!CLOUD?`<button class=\"btn ghost sm\" onclick=\"App.showPin('${id}')\">${svg(IC.gear,14)} View / reset PIN</button>`:''}<button class=\"btn ghost sm\" onclick=\"App.openPerms('${id}')\">Permissions</button>${primary?`<span class=\"badge b-confirmed\" title=\"The primary owner account can never be deactivated or deleted.\">${svg(IC.check,12)} Primary owner \u00b7 protected</span>`:(self?'<span class=\"cellsub\">This is you</span>':`<button class=\"btn ghost sm\" onclick=\"App.toggleActive('${id}')\">${u.status==='active'?'Deactivate':'Reactivate'}</button><button class=\"btn ghost sm\" style=\"color:var(--danger)\" onclick=\"App.deleteAccount('${id}')\">${svg(IC.x,13)} Delete account</button>`)}</div>`;})():''}
@@ -1826,7 +1832,7 @@ const App={
   /* ================= ENQUIRIES ================= */
   vEnquiries(){
     if(!this.can('enquiries'))return this.set(this.emptyBox('No access','Enquiries are for Sales, KAM & Admin.'));
-    let E=[...this.myEnq()];
+    let E=[...this.liveEnq()];
     if(this._q)E=E.filter(e=>(e.client+e.contact+e.service).toLowerCase().includes(this._q));
     E.sort((a,b)=>b.createdAt-a.createdAt);
     const eb=s=>({new:'b-new',qualified:'b-qualified',proposal:'b-proposal',won:'b-won',lost:'b-lost'}[s]||'b-draft');
@@ -1882,7 +1888,7 @@ const App={
   vRequests(){
     const f=this.filters;this._rsel=this._rsel||{};
     // Visibility comes from the A3 matrix, not an ad-hoc seeall check.
-    let R=this.myReqs().filter(r=>r.status!=='draft'||r.requesterId===this.me.id);
+    let R=this.liveReqs().filter(r=>r.status!=='draft'||r.requesterId===this.me.id);
     if(f.mine)R=R.filter(r=>r.requesterId===this.me.id||r.assigneeId===this.me.id);
     /* D14 — the global search box set this._q and re-rendered this view, but
        nothing here ever read it, so the Requests search did nothing at all.
@@ -1915,7 +1921,7 @@ const App={
         <span class="chip ${f.special==='high'?'on':''}" onclick="App.filters.special=App.filters.special==='high'?null:'high';App.vRequests()">High priority</span>
         <span class="chip ${f.special==='overdue'?'on':''}" onclick="App.filters.special=App.filters.special==='overdue'?null:'overdue';App.vRequests()">Overdue</span>
         <span style="flex:1"></span><span class="chip ${f.mine?'on':''}" onclick="App.filters.mine=!App.filters.mine;App.vRequests()">Only mine</span></div>
-      ${sel.length?`<div class="selbar"><b>${sel.length}</b> selected ${canAssign?`<select class="mini-select" style="color:var(--ink)" onchange="if(this.value)App.bulkAssign(this.value)"><option value="">Assign to…</option>${this.assignTargets().map(u=>`<option value="${u.id}">${esc(u.name)} · ${ROLES[u.role]}</option>`).join("")}</select>`:''}<select class="mini-select" style="color:var(--ink)" onchange="if(this.value)App.bulkPriority(this.value)"><option value="">Priority…</option><option value="high">High</option><option value="med">Medium</option><option value="low">Low</option></select><button class="btn ghost xs" onclick="App.exportReqsSel()">${svg(IC.down,13)} Export</button><span style="flex:1"></span><button class="btn ghost xs" onclick="App._rsel={};App.vRequests()">Clear</button></div>`:''}
+      ${sel.length?`<div class="selbar"><b>${sel.length}</b> selected ${canAssign?`<select class="mini-select" style="color:var(--ink)" onchange="if(this.value)App.bulkAssign(this.value)"><option value="">Assign to…</option>${this.assignTargets().map(u=>`<option value="${u.id}">${esc(u.name)} · ${ROLES[roleKey(u)]}</option>`).join("")}</select>`:''}<select class="mini-select" style="color:var(--ink)" onchange="if(this.value)App.bulkPriority(this.value)"><option value="">Priority…</option><option value="high">High</option><option value="med">Medium</option><option value="low">Low</option></select><button class="btn ghost xs" onclick="App.exportReqsSel()">${svg(IC.down,13)} Export</button>${this.can('admin')?`<button class="btn danger xs" onclick="App.confirmBulkDelete('requests')">${svg(IC.x,13)} Delete</button>`:''}<span style="flex:1"></span><button class="btn ghost xs" onclick="App._rsel={};App.vRequests()">Clear</button></div>`:''}
       <div class="card">${R.length?`<div class="tblwrap"><table class="tbl fixed"><thead><tr><th style="width:34px"></th><th class="c-id">ID</th><th class="c-brand">Brand / niche</th><th class="c-camp">Campaign</th><th class="c-status">Priority</th><th class="c-status">Flags</th><th class="c-who">Owner</th><th class="c-who">Assigned by Sales/KAM</th><th class="c-who">Assigned by Discovery Manager</th><th class="c-num">Rounds</th><th class="c-when">Deadline</th><th class="c-status">Status</th></tr></thead><tbody>
         ${R.map(r=>`<tr class="click" onclick="App.openReq('${r.id}')"><td onclick="event.stopPropagation()"><span class="chk ${this._rsel[r.id]?'on':''}" onclick="App.rsel('${r.id}')">${svg(IC.check,12)}</span></td><td class="id">${r.id}</td><td><div class="strong">${esc(r.brandName)}</div><div class="cellsub">${esc(r.niche)} · Sample round ${r.sampleRound||r.round||1}</div></td><td>${this.campChip(r.campaignId,r.campaignName)}</td><td>${this.priBadge(r.priority)}</td><td>${this.flagBadge(r)||'<span class="cellsub">—</span>'}</td><td title="${esc((this.user(r.requesterId)||{}).name||'')}">${this.whoCell(r.requesterId)}</td><td>${r.routedById?this.whoCell(r.routedToManagerId):'<span class="cellsub">—</span>'}</td><td>${(r.assigneeId||r.assignedToId)?this.whoCell(r.assignedToId||r.assigneeId):`<span class="cellsub">${this.hopLabel(r)}</span>`}</td><td><span class="mono" style="font-weight:600">${r.rounds.length}</span>${r.rounds.some(x=>x.decision==='rejected')?' <span class="cellsub">('+r.rounds.filter(x=>x.decision==='rejected').length+'r)</span>':''}</td><td>${this.deadlineCell(r)}</td><td>${statusBadge(r.status)}</td></tr>`).join('')}
         </tbody></table></div>`:this.emptyBox('No requests here','Try a different filter or raise a new request.',this.can('raise')?`<button class="btn primary" onclick="App.openNewReq()">${svg(IC.plus,16)} New request</button>`:'')}</div>`);
@@ -2000,7 +2006,7 @@ const App={
         ${r.notes?`<div class="notice">${svg(IC.bolt,16)}<div>${esc(r.notes)}</div></div>`:''}
         ${(this.can('raise')||this.can('discover')||this.can('review')||this.can('assign'))?`<div class="sec-t">Add creators to this request</div><div class="card pad" style="margin-bottom:14px"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input class="inp" id="req_addsearch" placeholder="Search roster to add a creator to this request…" oninput="App.reqAddSearch('${r.id}',this.value)" style="flex:1;min-width:200px"><button class="btn ghost sm" onclick="App.reqToCompare('${r.id}')">${svg(IC.report,14)} Compare its creators</button></div><div id="req_addsuggest" class="cmp-pool" style="margin-top:8px"></div></div>`:''}
         ${(r.suggestedCreators&&r.suggestedCreators.length)?`<div class="sec-t">Client-requested creators <span class="cellsub">(${r.suggestedCreators.length})</span></div><div class="card pad" style="margin-bottom:14px;background:var(--surface-2)"><div class="cellsub" style="margin-bottom:8px">Added by Sales/KAM when raising this request — merge into your discovery pool.</div>${r.suggestedCreators.map(sc=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--line-2)"><div><b style="font-size:13px">${esc(sc.name||('@'+sc.handle))}</b> <span class="cellsub">${nfmt(sc.followers||0)} · ${esc(sc.category||'—')}</span></div><span class="cellsub">${esc(sc.reason||'')} · by ${esc(sc.addedByName||'—')}</span></div>`).join('')}</div>`:''}
-        ${this.can('assign')&&!r.assigneeId&&r.status!=='draft'?(()=>{const tgt=this.assignTargets();return tgt.length?`<div class="sec-t">Assign discovery</div><div class="cellsub" style="margin:-4px 0 8px">${this.assignHint()}</div><div style="display:flex;gap:8px"><select class="mini-select" id="assignSel" style="flex:1">${tgt.map(u=>`<option value="${u.id}">${esc(u.name)} · ${ROLES[u.role]}</option>`).join('')}</select><button class="btn primary sm" onclick="App.assignReq('${r.id}')">Assign</button></div>`:`<div class="sec-t">Assign discovery</div><div class="notice" style="font-size:12px">${svg(IC.bolt,13)}<div>No eligible people to assign to yet. ${this.me.role==='sales'||this.me.role==='kam'?'Sales & KAM route to a <b>Discovery Manager</b> — create one in People & Access.':'Add active Discovery people first.'}</div></div>`;})():''}
+        ${this.can('assign')&&!r.assigneeId&&r.status!=='draft'?(()=>{const tgt=this.assignTargets();return tgt.length?`<div class="sec-t">Assign discovery</div><div class="cellsub" style="margin:-4px 0 8px">${this.assignHint()}</div><div style="display:flex;gap:8px"><select class="mini-select" id="assignSel" style="flex:1">${tgt.map(u=>`<option value="${u.id}">${esc(u.name)} · ${ROLES[roleKey(u)]}</option>`).join('')}</select><button class="btn primary sm" onclick="App.assignReq('${r.id}')">Assign</button></div>`:`<div class="sec-t">Assign discovery</div><div class="notice" style="font-size:12px">${svg(IC.bolt,13)}<div>No eligible people to assign to yet. ${this.me.role==='sales'||this.me.role==='kam'?'Sales & KAM route to a <b>Discovery Manager</b> — create one in People & Access.':'Add active Discovery people first.'}</div></div>`;})():''}
         ${r.status==='draft'&&r.requesterId===this.me.id?`<div class="actbar"><button class="btn primary sm" onclick="App.publishDraft('${r.id}')">${svg(IC.up,15)} Publish request</button></div>`:''}
         ${canDiscover?`<div class="sec-t">Deliver profiles</div>${r.status==='assigned'?`<div class="actbar" style="margin-bottom:12px"><button class="btn ghost sm" onclick="App.startWork('${r.id}')">Start discovery</button></div>`:''}<div class="drop" id="dropZone" ondragover="event.preventDefault();this.classList.add('dragging')" ondragleave="this.classList.remove('dragging')" ondrop="event.preventDefault();this.classList.remove('dragging');App.handleSheet({target:{files:event.dataTransfer.files}},'${r.id}')" onclick="document.getElementById('sheetFile').click()"><div class="ic">${svg(IC.up,22)}</div><b>Drop or click to upload the profile sheet</b><small>.xlsx / .xls / .csv — one sheet per round · drag the file right in</small></div><input type="file" id="sheetFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="App.handleSheet(event,'${r.id}')">`:''}
         <div class="sec-t">Submission rounds ${r.rounds.length?`<span class="badge b-draft" style="text-transform:none">${r.rounds.length}</span>`:''}</div>
@@ -2419,6 +2425,7 @@ const App={
       try{const rr=await fetch(API('/api/ai-search'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q})});const d=await rr.json();if(d.ok)parsed=d.filters;}catch(e){/* fall through to local */}
     }
     if(!parsed)parsed=this.parseQueryLocal(q);
+    parsed=this.withFollowerRange(parsed);
     const results=this.applyCreatorFilters(parsed);
     this.renderSearchResults(q,parsed,results,!!useAi);
   },
@@ -2435,6 +2442,49 @@ const App={
     if(/authentic|genuine|real audience/.test(s))f.minAuth=80;
     if(/nano/.test(s))f.tier='nano';else if(/micro/.test(s))f.tier='micro';else if(/mega/.test(s))f.tier='mega';
     return f;
+  },
+  /* D15 — follower range filter with preset tiers, composable with the
+     category/brand/city filters the query already produced. An explicit
+     range always wins over whatever the text parse guessed. */
+  FTIERS:[['nano','Nano',0,10000],['micro','Micro',10000,100000],['mid','Mid',100000,500000],['macro','Macro',500000,1000000],['mega','Mega',1000000,0]],
+  withFollowerRange(f){
+    const r=this._fRange||{};
+    const out={...f};
+    if(r.min)out.followersMin=+r.min;
+    if(r.max)out.followersMax=+r.max;
+    return out;
+  },
+  setFTier(key){
+    const t=this.FTIERS.find(x=>x[0]===key);
+    if(!t){this._fRange={};}
+    else this._fRange={min:t[2]||'',max:t[3]||''};
+    const lo=document.getElementById('fr_min'),hi=document.getElementById('fr_max');
+    if(lo)lo.value=this._fRange.min||'';
+    if(hi)hi.value=this._fRange.max||'';
+    this._fTier=t?key:'';
+    document.querySelectorAll('#fTiers .chip').forEach(c=>c.classList.toggle('on',c.dataset.t===this._fTier));
+    this.runAiSearch();
+  },
+  setFRange(){
+    const lo=+(document.getElementById('fr_min')||{}).value||'';
+    const hi=+(document.getElementById('fr_max')||{}).value||'';
+    this._fRange={min:lo,max:hi};this._fTier='';
+    document.querySelectorAll('#fTiers .chip').forEach(c=>c.classList.remove('on'));
+    this.runAiSearch();
+  },
+  followerFilterUI(){
+    const r=this._fRange||{};
+    return `<div class="card pad" style="margin-bottom:14px">
+      <div style="font-weight:600;margin-bottom:8px">Followers</div>
+      <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap">
+        <div class="field" style="margin:0"><label>Min</label><input class="inp" id="fr_min" type="number" min="0" placeholder="0" value="${r.min||''}" onchange="App.setFRange()"></div>
+        <div class="field" style="margin:0"><label>Max</label><input class="inp" id="fr_max" type="number" min="0" placeholder="any" value="${r.max||''}" onchange="App.setFRange()"></div>
+        <button class="btn ghost xs" onclick="App.setFTier('')">Clear</button>
+      </div>
+      <div id="fTiers" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+        ${this.FTIERS.map(([k,label,lo,hi])=>`<span class="chip ${this._fTier===k?'on':''}" data-t="${k}" onclick="App.setFTier('${k}')">${label} ${hi?(lo?nfmt(lo)+'–'+nfmt(hi):'<'+nfmt(hi)):'>'+nfmt(lo)}</span>`).join('')}
+      </div>
+    </div>`;
   },
   applyCreatorFilters(f){
     let list=(this.db.roster||[]).slice();
@@ -2470,6 +2520,7 @@ const App={
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">${['fashion creators in Mumbai under ₹1 lakh','mega fitness female instagram','authentic beauty micro creators','barter travel creators in Goa'].map(ex=>`<span class="chip" onclick="document.getElementById('aiSearchQ').value='${ex.replace(/'/g,"")}';App.runAiSearch()">${ex}</span>`).join('')}</div>
         <div style="display:flex;justify-content:space-between;margin-top:10px"><button class="btn ghost xs" onclick="App.saveCurrentSearch()">${svg(IC.plus,12)} Save this search</button></div>
       </div>
+      ${this.followerFilterUI()}
       <div id="aiSearchResult"></div>
       <div class="two-col" style="margin-top:16px;align-items:start">
         <div class="card pad"><div style="font-weight:600;margin-bottom:8px">Saved searches</div>${this._savedSearches.map((sv,i)=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--line-2)"><span class="click" style="cursor:pointer;font-size:13px" onclick="document.getElementById('aiSearchQ').value='${sv.q.replace(/'/g,"")}';App.runAiSearch()">${esc(sv.q)}</span><button class="xbtn" style="width:22px;height:22px" onclick="App.delSavedSearch(${i})">${svg(IC.x,12)}</button></div>`).join('')||'<div class="cellsub">None yet.</div>'}</div>
@@ -2493,6 +2544,7 @@ const App={
     this.db.reqs.filter(r=>r.status!=='draft'&&r.deadline).forEach(r=>{const d=new Date(r.deadline);if(d.getFullYear()===y&&d.getMonth()===mo)evs.push({day:d.getDate(),type:'deadline',label:(r.brandName||'')+' · '+(r.niche||''),id:r.id,status:r.status,overdue:r.deadline<now()&&r.status!=='approved'});});
     (this.db.camps||[]).forEach(c=>{[['start','Campaign start'],['end','Campaign end']].forEach(([k,lbl])=>{if(c[k]){const d=new Date(c[k]);if(d.getFullYear()===y&&d.getMonth()===mo)evs.push({day:d.getDate(),type:'campaign',label:(c.name||lbl),id:c.id});}});});
     const byDay={};evs.forEach(e=>{(byDay[e.day]=byDay[e.day]||[]).push(e);});
+    this._calByDay=byDay;   // D17: the day-detail popover reads this
     // conflict = 3+ deadlines same day
     const cells=[];
     for(let i=0;i<startDow;i++)cells.push(null);
@@ -2510,8 +2562,26 @@ const App={
       </div>
       <div class="cal-grid">
         ${dow.map(d=>`<div class="cal-dow">${d}</div>`).join('')}
-        ${cells.map(d=>{if(d==null)return '<div class="cal-cell empty"></div>';const list=byDay[d]||[];const conflict=list.filter(e=>e.type==='deadline').length>=3;return `<div class="cal-cell ${isToday(d)?'today':''} ${conflict?'conflict':''}"><div class="cal-num">${d}${conflict?' <span class="cal-warn" title="3+ deadlines — possible overload">⚠</span>':''}</div>${list.slice(0,4).map(e=>`<div class="cal-ev ${e.type} ${e.overdue?'over':''}" title="${esc(e.label)}" onclick="${e.type==='deadline'?`App.openReq('${e.id}')`:''}">${esc(e.label.slice(0,22))}</div>`).join('')}${list.length>4?`<div class="cellsub" style="font-size:10px">+${list.length-4} more</div>`:''}</div>`;}).join('')}
+        ${cells.map(d=>{if(d==null)return '<div class="cal-cell empty"></div>';const list=byDay[d]||[];const conflict=list.filter(e=>e.type==='deadline').length>=3;return `<div class="cal-cell ${isToday(d)?'today':''} ${conflict?'conflict':''}"><div class="cal-num">${d}${conflict?' <span class="cal-warn" title="3+ deadlines — possible overload">⚠</span>':''}</div>${list.slice(0,4).map(e=>`<div class="cal-ev ${e.type} ${e.overdue?'over':''}" title="${esc(e.label)}" onclick="${e.type==='deadline'?`App.openReq('${e.id}')`:''}">${esc(e.label.slice(0,22))}</div>`).join('')}${list.length>4?`<div class="cal-more" onclick="event.stopPropagation();App.calDay(${d})">+${list.length-4} more</div>`:''}</div>`;}).join('')}
       </div>`);
+  },
+  /* D17 — the day cell is fixed-height so it truncated at 4 events and the
+     "+N more" label did nothing. It's now a control that opens the full day
+     with links through to each record. */
+  calDay(d){
+    const list=(this._calByDay&&this._calByDay[d])||[];
+    const dt=new Date(this._calYear,this._calMonth,d);
+    const title=dt.toLocaleDateString(undefined,{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+    this.modal(`<div class="mhead"><div><h3>${esc(title)}</h3><p>${list.length} item${list.length!==1?'s':''} on this day</p></div>
+      <button class="xbtn" onclick="App.closeAll()">${svg(IC.x,17)}</button></div>
+      <div class="mbody">${list.length?`<div style="display:flex;flex-direction:column;gap:8px">
+        ${list.map(e=>`<div class="card pad ${e.type==='deadline'?'click':''}" ${e.type==='deadline'?`onclick="App.closeAll();App.openReq('${e.id}')"`:''} style="display:flex;align-items:center;gap:10px">
+          <span class="cal-ev ${e.type} ${e.overdue?'over':''}" style="pointer-events:none">${esc(e.type)}</span>
+          <div style="flex:1;min-width:0"><div class="strong" style="white-space:normal">${esc(e.label)}</div>
+          ${e.overdue?'<div class="cellsub" style="color:var(--danger)">Overdue</div>':''}</div>
+          ${e.type==='deadline'?svg(IC.chev,15):''}
+        </div>`).join('')}
+      </div>`:'<div class="cellsub">Nothing scheduled.</div>'}</div>`);
   },
   calMove(n){let mo=this._calMonth+n,y=this._calYear;if(mo<0){mo=11;y--;}if(mo>11){mo=0;y++;}this._calMonth=mo;this._calYear=y;this.vCalendar();},
   calToday(){this._calMonth=new Date().getMonth();this._calYear=new Date().getFullYear();this.vCalendar();},
@@ -4018,7 +4088,7 @@ const App={
       </div>
       <div class="card chart-card" style="margin-bottom:16px"><div class="ct">Team performance — person-wise</div><div class="cs">Click a person for their full breakdown</div>
         <table class="tbl" style="margin-top:6px"><thead><tr><th>Person</th><th>Dept</th><th>Raised</th><th>Enquiries</th><th>Delivered</th><th>Avg TAT</th><th>Rejection</th></tr></thead><tbody>
-        ${this.db.users.filter(u=>u.status==='active').map(u=>({u,s:this.personStats(u.id)})).sort((a,b)=>(b.s.raised+b.s.delivered)-(a.s.raised+a.s.delivered)).map(({u,s})=>`<tr class="click" onclick="App.personModal('${u.id}')"><td class="strong">${esc(u.name)}</td><td><span class="badge b-draft" style="text-transform:none">${ROLES[u.role]}</span></td><td>${s.raised}</td><td>${s.enq}</td><td>${s.delivered}</td><td>${fmtDur(s.avgTat)}</td><td>${s.rejRate}%</td></tr>`).join('')}
+        ${this.db.users.filter(u=>u.status==='active').map(u=>({u,s:this.personStats(u.id)})).sort((a,b)=>(b.s.raised+b.s.delivered)-(a.s.raised+a.s.delivered)).map(({u,s})=>`<tr class="click" onclick="App.personModal('${u.id}')"><td class="strong">${esc(u.name)}</td><td><span class="badge b-draft" style="text-transform:none">${ROLES[roleKey(u)]}</span></td><td>${s.raised}</td><td>${s.enq}</td><td>${s.delivered}</td><td>${fmtDur(s.avgTat)}</td><td>${s.rejRate}%</td></tr>`).join('')}
         </tbody></table>
       </div>
         <div class="card chart-card"><div class="ct">Rejection rounds by brand</div><div class="cs">Where profiles bounce</div>${Object.keys(rejBrand).length?bar(Object.entries(rejBrand).sort((a,b)=>b[1]-a[1])):'<div class="cellsub">No rejections 🎉</div>'}</div>
@@ -4080,10 +4150,149 @@ const App={
   },
 
   /* ================= PEOPLE & ACCESS ================= */
+  /* A2 — Teams management. Admin-only: create, rename, set department, set
+     manager, and move members between teams. */
+  teamsPanel(){
+    const teams=(this.db.teams||[]).slice().sort((a,b)=>a.department.localeCompare(b.department)||a.name.localeCompare(b.name));
+    const active=this.db.users.filter(u=>u.status==='active');
+    const unassigned=active.filter(u=>!u.teamUid&&['sales','kam'].includes(deptOf(u)));
+    if(!teams.length)return `<div class="sec-t">Teams</div><div class="card pad"><div class="cellsub">No teams yet — run supabase-rbac-migration.sql to create them.</div></div>`;
+    const memberRow=u=>`<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line-2)">
+      <span class="avatar av" style="width:26px;height:26px;font-size:11px">${initials(u.name)}</span>
+      <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600">${esc(u.name)}${isMgr(u)?' <span class="badge b-review" style="font-size:9px">Manager</span>':''}</div>
+      <div class="cellsub">${esc(this.roleLabel(u))}</div></div>
+      <select class="mini-select" onchange="App.moveMember('${u.id}',this.value)">
+        <option value="">— move —</option>
+        ${teams.filter(t=>t.department===deptOf(u)).map(t=>`<option value="${t.id}" ${u.teamUid===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
+      </select></div>`;
+    return `<div class="sec-t">Teams</div>
+      ${unassigned.length?`<div class="notice" style="margin-bottom:12px;border-left:3px solid #f5a524">${svg(IC.people,16)}<div><b>${unassigned.length} unassigned</b> — their pod couldn't be derived from existing data, so it wasn't guessed. Place each below.</div></div>
+      <div class="card pad" style="margin-bottom:12px">${unassigned.map(memberRow).join('')}</div>`:''}
+      <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr));margin-bottom:12px">
+        ${teams.map(t=>{const members=active.filter(u=>u.teamUid===t.id);return `<div class="card pad">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <input class="inp" style="font-weight:600;flex:1" value="${esc(t.name)}" onchange="App.renameTeam('${t.id}',this.value)">
+            <span class="tag">${esc(t.department)}</span>
+          </div>
+          <div class="field" style="margin:0 0 8px"><label>Manager</label>
+            <select class="inp" onchange="App.setTeamManager('${t.id}',this.value)">
+              <option value="">— none —</option>
+              ${active.filter(u=>deptOf(u)===t.department&&isMgr(u)).map(u=>`<option value="${u.id}" ${t.managerId===u.id?'selected':''}>${esc(u.name)}</option>`).join('')}
+            </select></div>
+          <div class="cellsub" style="margin-bottom:4px">${members.length} member${members.length!==1?'s':''}</div>
+          ${members.map(memberRow).join('')||'<div class="cellsub">No members yet</div>'}
+        </div>`;}).join('')}
+      </div>
+      <div class="card pad" style="margin-bottom:20px">
+        <div style="font-weight:600;margin-bottom:8px">Add a team</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end">
+          <div class="field" style="margin:0;flex:1;min-width:180px"><label>Name</label><input class="inp" id="nt_name" placeholder="e.g. TPA Sales"></div>
+          <div class="field" style="margin:0"><label>Department</label><select class="inp" id="nt_dept">${DEPTS.filter(([k])=>k!=='admin').map(([k,l])=>`<option value="${k}">${l}</option>`).join('')}</select></div>
+          <button class="btn primary" onclick="App.createTeam()">${svg(IC.plus,15)} Create</button>
+        </div>
+      </div>`;
+  },
+  async createTeam(){
+    const name=(document.getElementById('nt_name')||{}).value||'';
+    const dept=(document.getElementById('nt_dept')||{}).value||'';
+    if(!name.trim())return this.toast('Enter a team name','err');
+    if((this.db.teams||[]).some(t=>t.department===dept&&t.name.trim().toLowerCase()===name.trim().toLowerCase()))
+      return this.toast('That team already exists in this department','err');
+    this._lastLocalSave=Date.now();
+    try{
+      const {data,error}=await SB.from('teams').insert({name:name.trim(),department:dept}).select().single();
+      if(error)throw error;
+      this.db.teams.push({id:data.id,name:data.name,department:data.department,managerId:null});
+      this.audit('team.create','team:'+data.id,{name:data.name,department:data.department});
+      this.toast('Team created','ok');this.vUsers();
+    }catch(e){console.error('createTeam',e);this.toast('Could not create team: '+(e.message||e),'err');}
+  },
+  async renameTeam(id,name){
+    if(!name.trim())return this.toast('Team name cannot be empty','err');
+    const t=this.team(id);if(!t)return;
+    this._lastLocalSave=Date.now();
+    try{
+      const {error}=await SB.from('teams').update({name:name.trim()}).eq('id',id);
+      if(error)throw error;
+      t.name=name.trim();this.audit('team.rename','team:'+id,{name:t.name});this.toast('Renamed','ok');
+    }catch(e){console.error('renameTeam',e);this.toast('Rename failed: '+(e.message||e),'err');}
+  },
+  async setTeamManager(id,uid){
+    const t=this.team(id);if(!t)return;
+    this._lastLocalSave=Date.now();
+    try{
+      const {error}=await SB.from('teams').update({manager_id:uid||null}).eq('id',id);
+      if(error)throw error;
+      t.managerId=uid||null;this.audit('team.manager','team:'+id,{manager:uid||null});this.toast('Manager set','ok');
+    }catch(e){console.error('setTeamManager',e);this.toast('Update failed: '+(e.message||e),'err');}
+  },
+  async moveMember(uid,teamId){
+    if(!teamId)return;
+    const u=this.user(uid);if(!u)return;
+    this._lastLocalSave=Date.now();
+    try{
+      const {error}=await SB.from('profiles').update({team_uid:teamId}).eq('id',uid);
+      if(error)throw error;
+      u.teamUid=teamId;
+      this.audit('team.move','user:'+uid,{name:u.name,team:(this.team(teamId)||{}).name});
+      this.toast(u.name+' moved to '+((this.team(teamId)||{}).name||'team'),'ok');this.vUsers();
+    }catch(e){console.error('moveMember',e);this.toast('Move failed: '+(e.message||e),'err');}
+  },
+  /* C10 — soft delete. Records are hidden from every list but recoverable by
+     an Admin for 30 days. Deletes go through the soft_delete RPC so the rule
+     is enforced in Postgres, not just here. */
+  isDeleted(x){return !!(x&&x.deletedAt);},
+  liveReqs(){return this.myReqs().filter(r=>!this.isDeleted(r));},
+  liveEnq(){return this.myEnq().filter(e=>!this.isDeleted(e));},
+  binCount(){
+    const a=(this.db.reqs||[]).filter(r=>this.isDeleted(r)).length;
+    const b=(this.db.enq||[]).filter(e=>this.isDeleted(e)).length;
+    return a+b;
+  },
+  async softDelete(kind,ids,restore){
+    if(!ids||!ids.length)return;
+    const arr=kind==='requests'?this.db.reqs:this.db.enq;
+    if(CLOUD){
+      this._lastLocalSave=Date.now();
+      try{
+        const {error}=await SB.rpc('soft_delete',{p_table:kind,p_ids:ids,p_restore:!!restore});
+        if(error)throw error;
+      }catch(e){
+        console.error('softDelete',e);
+        return this.toast((restore?'Restore':'Delete')+' failed: '+(e.message||e),'err');
+      }
+    }
+    ids.forEach(id=>{const x=arr.find(y=>y.id===id);if(x){x.deletedAt=restore?null:now();x.deletedBy=restore?null:this.me.id;}});
+    if(!CLOUD)await this.save(kind==='requests'?'reqs':'enq');
+    this.audit(restore?'record.restore':'record.delete',kind,{count:ids.length});
+    this.toast(ids.length+' '+(restore?'restored':'moved to Deleted'),'ok');
+    this.renderNav();this.go(this.view);
+  },
+  confirmBulkDelete(kind){
+    const sel=kind==='requests'?this._rsel:this._esel;
+    const ids=Object.keys(sel||{}).filter(k=>sel[k]);
+    if(!ids.length)return this.toast('Nothing selected','err');
+    if(!confirm(ids.length+' record'+(ids.length>1?'s':'')+' will be moved to Deleted. This is recoverable — an Admin can restore them for 30 days. Continue?'))return;
+    if(kind==='requests')this._rsel={};else this._esel={};
+    this.softDelete(kind,ids,false);
+  },
+  vDeleted(){
+    if(!this.can('admin'))return this.set(this.emptyBox('Admins only','The Deleted bin is admin-only.'));
+    const reqs=(this.db.reqs||[]).filter(r=>this.isDeleted(r));
+    const enq=(this.db.enq||[]).filter(e=>this.isDeleted(e));
+    const rowR=r=>`<tr><td class="id">${r.id}</td><td class="strong">${esc(r.brandName||'')}</td><td>${esc(r.niche||'')}</td><td class="cellsub">${this.agoStr(r.deletedAt)}</td><td>${esc((this.user(r.deletedBy)||{}).name||'')}</td><td><button class="btn ghost xs" onclick="App.softDelete('requests',['${r.id}'],true)">Restore</button></td></tr>`;
+    const rowE=e=>`<tr><td class="strong">${esc(e.client||'')}</td><td>${esc(e.service||'')}</td><td>${esc(e.status||'')}</td><td class="cellsub">${this.agoStr(e.deletedAt)}</td><td>${esc((this.user(e.deletedBy)||{}).name||'')}</td><td><button class="btn ghost xs" onclick="App.softDelete('enquiries',['${e.id}'],true)">Restore</button></td></tr>`;
+    this.set(`
+      <div class="pagehead"><div class="lead"><h2>Deleted</h2><p>Recoverable for 30 days · ${reqs.length+enq.length} record${reqs.length+enq.length!==1?'s':''}</p></div></div>
+      <div class="sec-t">Requests <span class="cellsub">${reqs.length}</span></div>
+      <div class="card" style="margin-bottom:18px">${reqs.length?`<div class="tblwrap"><table class="tbl"><thead><tr><th>ID</th><th>Brand</th><th>Niche</th><th>Deleted</th><th>By</th><th></th></tr></thead><tbody>${reqs.map(rowR).join('')}</tbody></table></div>`:'<div class="pad cellsub">Nothing deleted.</div>'}</div>
+      <div class="sec-t">Enquiries <span class="cellsub">${enq.length}</span></div>
+      <div class="card">${enq.length?`<div class="tblwrap"><table class="tbl"><thead><tr><th>Client</th><th>Service</th><th>Status</th><th>Deleted</th><th>By</th><th></th></tr></thead><tbody>${enq.map(rowE).join('')}</tbody></table></div>`:'<div class="pad cellsub">Nothing deleted.</div>'}</div>`);
+  },
   vUsers(){
     if(!this.can('admin'))return this.set(this.emptyBox('Admins only','You don\'t have access to People & Access.'));
     const pending=this.db.users.filter(u=>u.status==='pending'),active=this.db.users.filter(u=>u.status==='active'),disabled=this.db.users.filter(u=>u.status==='disabled');
-    const row=u=>`<tr><td><div class="who"><span class="avatar av">${initials(u.name)}</span><div><div class="nm">${esc(u.name)} ${u.locked?'<span class="badge b-primary" style="background:var(--primary-soft);color:var(--primary-deep);font-size:10px">Permanent admin</span>':''}</div><div class="cellsub">${esc(u.email)}</div></div></div></td><td><span class="badge b-draft" style="text-transform:none">${ROLES[u.role]}</span></td><td>${u.status==='active'?'<span class="badge b-active"><span class="d"></span>Active</span>':u.status==='pending'?'<span class="badge b-pending"><span class="d"></span>Pending</span>':'<span class="badge b-rejected"><span class="d"></span>Disabled</span>'}</td><td class="cellsub">${fmtDate(u.createdAt)}</td><td style="text-align:right">${u.status==='pending'?`<button class="btn success xs" onclick="App.setUser('${u.id}','active')">Approve</button> <button class="btn ghost xs" onclick="App.setUser('${u.id}','disabled')">Decline</button>`:''}${!CLOUD&&u.status==='active'?`<button class="btn ghost xs" onclick="App.showPin('${u.id}')">${svg(IC.gear,11)} PIN</button> `:''}${u.status==='active'&&u.id!==this.me.id&&!u.locked?`<button class="btn ghost xs" onclick="App.openPerms('${u.id}')">Permissions</button> <button class="btn ghost xs" onclick="App.moduleAccessModal('${u.id}')">Modules</button> <button class="btn ghost xs" onclick="App.setUser('${u.id}','disabled')">Disable</button>`:''}${u.id===this.me.id?`<button class="btn ghost xs" onclick="App.moduleAccessModal('${u.id}')">My modules</button> <span class="cellsub">You</span>`:''}${u.locked&&u.id!==this.me.id?'<span class="cellsub">Protected</span>':''}${u.status==='disabled'?`<button class="btn ghost xs" onclick="App.setUser('${u.id}','active')">Re-enable</button>`:''}</td></tr>`;
+    const row=u=>`<tr><td><div class="who"><span class="avatar av">${initials(u.name)}</span><div><div class="nm">${esc(u.name)} ${u.locked?'<span class="badge b-primary" style="background:var(--primary-soft);color:var(--primary-deep);font-size:10px">Permanent admin</span>':''}</div><div class="cellsub">${esc(u.email)}</div></div></div></td><td><span class="badge b-draft" style="text-transform:none">${ROLES[roleKey(u)]}</span></td><td>${u.status==='active'?'<span class="badge b-active"><span class="d"></span>Active</span>':u.status==='pending'?'<span class="badge b-pending"><span class="d"></span>Pending</span>':'<span class="badge b-rejected"><span class="d"></span>Disabled</span>'}</td><td class="cellsub">${fmtDate(u.createdAt)}</td><td style="text-align:right">${u.status==='pending'?`<button class="btn success xs" onclick="App.setUser('${u.id}','active')">Approve</button> <button class="btn ghost xs" onclick="App.setUser('${u.id}','disabled')">Decline</button>`:''}${!CLOUD&&u.status==='active'?`<button class="btn ghost xs" onclick="App.showPin('${u.id}')">${svg(IC.gear,11)} PIN</button> `:''}${u.status==='active'&&u.id!==this.me.id&&!u.locked?`<button class="btn ghost xs" onclick="App.openPerms('${u.id}')">Permissions</button> <button class="btn ghost xs" onclick="App.moduleAccessModal('${u.id}')">Modules</button> <button class="btn ghost xs" onclick="App.setUser('${u.id}','disabled')">Disable</button>`:''}${u.id===this.me.id?`<button class="btn ghost xs" onclick="App.moduleAccessModal('${u.id}')">My modules</button> <span class="cellsub">You</span>`:''}${u.locked&&u.id!==this.me.id?'<span class="cellsub">Protected</span>':''}${u.status==='disabled'?`<button class="btn ghost xs" onclick="App.setUser('${u.id}','active')">Re-enable</button>`:''}</td></tr>`;
     const plan=Object.entries(ROLES).map(([rk,rv])=>`<tr><td class="strong">${rv}</td>${ALL_PERMS.map(([pk])=>`<td style="text-align:center">${(ROLE_DEFAULTS[rk]||{})[pk]?'<span style="color:var(--success)">●</span>':'<span style="color:var(--line)">○</span>'}</td>`).join('')}</tr>`).join('');
     this.set(`
       ${pending.length?`<div class="notice" style="margin-bottom:16px">${svg(IC.people,16)}<div><b>${pending.length} account${pending.length>1?'s':''}</b> waiting for approval below.</div></div>`:''}
@@ -4092,6 +4301,7 @@ const App={
       <input type="file" id="restoreFile" accept=".json" style="display:none" onchange="App.restore(event)">
       ${pending.length?`<div class="sec-t">Pending approval</div><div class="card" style="margin-bottom:20px"><table class="tbl"><tbody>${pending.map(row).join('')}</tbody></table></div>`:''}
       <div class="sec-t">Team</div><div class="card"><table class="tbl"><thead><tr><th>Person</th><th>Role</th><th>Status</th><th>Joined</th><th></th></tr></thead><tbody>${active.map(row).join('')}${disabled.map(row).join('')}</tbody></table></div>
+      ${this.teamsPanel()}
       <div class="sec-t">Access plan — what each department can do</div>
       <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Role</th>${ALL_PERMS.map(([,l])=>`<th style="text-align:center;font-size:9.5px">${l}</th>`).join('')}</tr></thead><tbody>${plan}</tbody></table></div>
       <div class="hint" style="margin-top:8px">● default on · ○ default off. Use <b>Permissions</b> on any person to override their defaults individually.</div>
@@ -4121,7 +4331,7 @@ const App={
   },
   openPerms(id){
     const u=this.user(id),eff=this.effPerms(u);
-    this.modal(`<div class="mhead"><div><h3>Permissions · ${esc(u.name)}</h3><p>Role default is <b>${ROLES[u.role]}</b> — override any switch below</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div>
+    this.modal(`<div class="mhead"><div><h3>Permissions · ${esc(u.name)}</h3><p>Role default is <b>${ROLES[roleKey(u)]}</b> — override any switch below</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div>
       <div class="mbody">
         <div class="field"><label>Department / role</label><select class="inp" id="pr_role" onchange="App.previewRole('${id}',this.value)">${Object.entries(ROLES).map(([k,v])=>`<option value="${k}" ${roleKey(u)===k?'selected':''}>${v}</option>`).join('')}</select></div>
         <div class="sec-t">Capabilities</div>
@@ -4197,7 +4407,7 @@ where email = '${esc(this.me.email||'you@yourcompany.com')}';</pre><p class="cel
     this.modal(`<div class="mhead"><div><h3>Login created ✓</h3><p>Share these with ${esc(u.name)}</p></div><button class="xbtn" onclick="App.closeAll();App.vUsers()">${svg(IC.x,16)}</button></div>
       <div class="mbody">
         <div class="notice" style="background:var(--success-soft);border-color:#c6ecdc;color:#0b7a54">${svg(IC.check,16)}<div>Account is active. They can sign in now with the details below.</div></div>
-        <div class="specgrid" style="margin-top:14px"><div class="s"><div class="k">Email</div><div class="v mono">${esc(u.email)}</div></div><div class="s"><div class="k">PIN</div><div class="v mono" style="font-size:18px;letter-spacing:2px">${esc(u.pin)}</div></div><div class="s"><div class="k">Role</div><div class="v">${ROLES[u.role]}</div></div><div class="s"><div class="k">Status</div><div class="v">Active</div></div></div>
+        <div class="specgrid" style="margin-top:14px"><div class="s"><div class="k">Email</div><div class="v mono">${esc(u.email)}</div></div><div class="s"><div class="k">PIN</div><div class="v mono" style="font-size:18px;letter-spacing:2px">${esc(u.pin)}</div></div><div class="s"><div class="k">Role</div><div class="v">${ROLES[roleKey(u)]}</div></div><div class="s"><div class="k">Status</div><div class="v">Active</div></div></div>
         <div class="actbar"><button class="btn primary sm" onclick="App.copyText('Email: ${esc(u.email)}  PIN: ${esc(u.pin)}')">${svg(IC.check,14)} Copy login</button>${u.email.includes('@')?`<button class="btn ghost sm" onclick="App.emailCreds('${u.id}')">${svg(IC.mail,14)} Email it to them</button>`:''}</div>
       </div>
       <div class="mfoot"><button class="btn primary" onclick="App.closeAll();App.vUsers()">Done</button></div>`);
@@ -4816,7 +5026,7 @@ Object.assign(App,{
         <div class="specgrid">${spec('Campaign',esc(campNm||'—'))}${spec('Requested by',this.user(r.requesterId)?.name||'—')}${spec('Assigned to',r.assigneeId?this.user(r.assigneeId).name:'<span class="unassigned">Unassigned</span>')}${spec('Selection rounds',r.rounds.length||0)}${spec('Followers',nfmt(r.fMin)+' – '+nfmt(r.fMax))}${spec('Creator type',esc(r.pType||'—'))}${spec('Platform',esc(r.platform||'—'))}${spec('Profiles needed',r.qty||'—')}${spec('Deadline',this.deadlineCell(r)+' '+this.slaChip(r))}${spec('Time in stage',this.agoStr(this.stageSince(r)))}${spec('Turnaround',tat!=null?fmtDur(tat):'in progress')}${r.brandBudget?spec('Brand budget',`₹${nfmt(r.brandBudget)}`):''}${(this.can('bridge')&&r.internalCost)?spec('Internal cost',`₹${nfmt(r.internalCost)}`):''}${(this.can('bridge')&&r.brandBudget&&r.internalCost)?spec('Est. margin',`<span style="color:${r.brandBudget-r.internalCost>=0?'var(--success)':'var(--danger)'}">₹${nfmt(r.brandBudget-r.internalCost)} (${Math.round((r.brandBudget-r.internalCost)/r.brandBudget*100)}%)</span>`):''}${r.sample?spec('Sample ref',esc(r.sample)):''}</div>
         ${r.notes?`<div class="notice">${svg(IC.bolt,16)}<div>${esc(r.notes)}</div></div>`:''}
         ${(r.suggestedCreators&&r.suggestedCreators.length)?`<div class="sec-t">Client-requested creators <span class="cellsub">(${r.suggestedCreators.length})</span></div><div class="card pad" style="margin-bottom:14px;background:var(--surface-2)"><div class="cellsub" style="margin-bottom:8px">Pre-picked by ${esc(this.user(r.requesterId)?.name||'Sales/KAM')}.${openRd?' <b>Push them into the open round →</b>':''}</div>${r.suggestedCreators.map(sc=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line-2)"><div><b style="font-size:13px">${esc(sc.name||('@'+sc.handle))}</b> <span class="cellsub">${nfmt(sc.followers||0)} · ${esc(sc.cats||sc.category||'—')}</span></div><div style="display:flex;gap:6px;align-items:center"><span class="cellsub">${esc(sc.reason||'')} · ${esc(sc.addedByName||'—')}</span>${(openRd&&this.canFillRound(r))?`<button class="btn ghost xs" onclick="App.roundAdd('${r.id}','${esc(sc.handle)}','client-requested','Client requested').then(()=>App.openReq('${r.id}'))">→ Round ${openRd.round}</button>`:''}</div></div>`).join('')}</div>`:''}
-        ${this.can('assign')&&!r.assigneeId&&r.status!=='draft'?(()=>{const tgt=this.assignTargets();return tgt.length?`<div class="sec-t">Assign discovery</div><div class="cellsub" style="margin:-4px 0 8px">${this.assignHint()}</div><div style="display:flex;gap:8px"><select class="mini-select" id="assignSel" style="flex:1">${tgt.map(u=>`<option value="${u.id}">${esc(u.name)} · ${ROLES[u.role]}</option>`).join('')}</select><button class="btn primary sm" onclick="App.assignReq('${r.id}')">Assign</button></div>`:`<div class="sec-t">Assign discovery</div><div class="notice" style="font-size:12px">${svg(IC.bolt,13)}<div>No eligible people to assign to yet.</div></div>`;})():''}
+        ${this.can('assign')&&!r.assigneeId&&r.status!=='draft'?(()=>{const tgt=this.assignTargets();return tgt.length?`<div class="sec-t">Assign discovery</div><div class="cellsub" style="margin:-4px 0 8px">${this.assignHint()}</div><div style="display:flex;gap:8px"><select class="mini-select" id="assignSel" style="flex:1">${tgt.map(u=>`<option value="${u.id}">${esc(u.name)} · ${ROLES[roleKey(u)]}</option>`).join('')}</select><button class="btn primary sm" onclick="App.assignReq('${r.id}')">Assign</button></div>`:`<div class="sec-t">Assign discovery</div><div class="notice" style="font-size:12px">${svg(IC.bolt,13)}<div>No eligible people to assign to yet.</div></div>`;})():''}
         ${r.status==='draft'&&r.requesterId===this.me.id?`<div class="actbar"><button class="btn primary sm" onclick="App.publishDraft('${r.id}')">${svg(IC.up,15)} Publish request</button></div>`:''}
         ${ws}
         <div class="sec-t">Selection rounds ${r.rounds.length?`<span class="badge b-draft" style="text-transform:none">${r.rounds.length}</span>`:''}</div>
