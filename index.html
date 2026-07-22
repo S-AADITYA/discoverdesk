@@ -910,41 +910,55 @@ const App={
   },
   async load(){
     if(CLOUD){
+      /* Each dataset below lives in its own SQL table now. If a table hasn't
+         been created yet (the migration for it hasn't been run), we fall back
+         to the old kv blob and remember that in _kvFb, so save() writes back
+         to kv too. That keeps a deploy safe in either order: ship the code
+         first and it behaves exactly like before until you run the SQL. */
+      this._kvFb=this._kvFb||{};
 
       // Load users
       this.db.users = await this.loadProfiles();
 
-      // Load influencers directly from SQL
+      // Brand sheets (db.infl). NOTE: these are per-brand working lists, not
+      // the `influencers` master creator table — different shape entirely.
       try{
-        this.db.infl = await this.fetchAll('influencers','followers',false);
+        const rows=await this.fetchAll('brand_sheets');
+        this.db.infl = rows.map(row=>({...row.data, id:row.id}));
+        this._kvFb.infl=false;
       }catch(e){
-        console.error('load influencers',e);
-        this.db.infl = [];
+        console.warn('brand_sheets unavailable — using kv fallback:',e&&e.message);
+        this.db.infl = await store.get(K.infl)||[];
+        this._kvFb.infl=true;
       }
+      this._inflIds = new Set(this.db.infl.map(i=>i.id));
 
-      // Load requests directly from SQL (role/team isolation enforced via RLS)
+      // Requests (role/team isolation enforced via RLS)
       try{
         const rows=await this.fetchAll('requests');
         this.db.reqs = rows.map(row=>({...row.data, id:row.id, _teamId:row.team_id}));
+        this._kvFb.reqs=false;
       }catch(e){
-        console.error('load requests',e);
-        this.db.reqs = [];
+        console.warn('requests unavailable — using kv fallback:',e&&e.message);
+        this.db.reqs = await store.get(K.reqs)||[];
+        this._kvFb.reqs=true;
       }
       this._reqIds = new Set(this.db.reqs.map(r=>r.id));
 
-      // Load enquiries directly from SQL (role/team isolation enforced via RLS)
+      // Enquiries (role/team isolation enforced via RLS)
       try{
         const rows=await this.fetchAll('enquiries');
         this.db.enq = rows.map(row=>({...row.data, id:row.id, _teamId:row.team_id}));
+        this._kvFb.enq=false;
       }catch(e){
-        console.error('load enquiries',e);
-        this.db.enq = [];
+        console.warn('enquiries unavailable — using kv fallback:',e&&e.message);
+        this.db.enq = await store.get(K.enq)||[];
+        this._kvFb.enq=true;
       }
       this._enqIds = new Set(this.db.enq.map(e=>e.id));
 
-      // Load roster through the masking view. Phone/email come back empty
-      // unless this user actually holds the 'contacts' permission — that
-      // decision is made in Postgres, not here.
+      // Roster, through the masking view. Phone/email come back empty unless
+      // this user holds the 'contacts' permission — decided in Postgres.
       try{
         const rows=await this.fetchAll('roster_v');
         this.db.roster = rows.map(row=>({
@@ -953,9 +967,11 @@ const App={
           id:row.id,
           _cmask:!row.contact_visible,
         }));
+        this._kvFb.roster=false;
       }catch(e){
-        console.error('load roster',e);
-        this.db.roster = [];
+        console.warn('roster_v unavailable — using kv fallback:',e&&e.message);
+        this.db.roster = await store.get(K.roster)||[];
+        this._kvFb.roster=true;
       }
       this._rosterIds = new Set(this.db.roster.map(r=>r.id));
 
@@ -982,10 +998,14 @@ const App={
     this._cidx=null;this._lastLocalSave=Date.now();
     const map={users:K.users,brands:K.brands,reqs:K.reqs,camps:K.camps,acts:K.acts,infl:K.infl,enq:K.enq,notif:K.notif,roster:K.roster};
     const keys=what?[what]:Object.keys(map);
+    const fb=this._kvFb||{};
     for(const k of keys){
-      if(k==='reqs' && CLOUD){ await this.saveReqsCloud(); continue; }
-      if(k==='enq'  && CLOUD){ await this.saveEnqCloud();  continue; }
-      if(k==='roster' && CLOUD){ await this.saveRosterCloud(); continue; }
+      // If load() had to fall back to kv for a dataset (table not created
+      // yet), keep writing it to kv so nothing is silently dropped.
+      if(k==='reqs'   && CLOUD && !fb.reqs){   await this.saveReqsCloud();   continue; }
+      if(k==='enq'    && CLOUD && !fb.enq){    await this.saveEnqCloud();    continue; }
+      if(k==='roster' && CLOUD && !fb.roster){ await this.saveRosterCloud(); continue; }
+      if(k==='infl'   && CLOUD && !fb.infl){   await this.saveInflCloud();   continue; }
       await store.set(map[k],this.db[k]);
     }
     this._lastLocalSave=Date.now();
@@ -1035,6 +1055,33 @@ const App={
       }
       this._enqIds=currentIds;
     }catch(e){ console.error('saveEnqCloud',e); }
+  },
+  // Brand sheets. These used to be written to the kv key 'dd:influencers',
+  // which cloud mode stopped reading — every edit was lost on reload.
+  async saveInflCloud(){
+    const currentIds=new Set(this.db.infl.map(i=>i.id));
+    const removed=[...(this._inflIds||[])].filter(id=>!currentIds.has(id));
+    try{
+      if(this.db.infl.length){
+        const rows=this.db.infl.map(i=>({
+          id:i.id,
+          team_id:this.me.teamId||'default',
+          brand_id:i.brandId||null,
+          campaign_id:i.campaignId||null,
+          data:i,
+        }));
+        const CH=500;
+        for(let j=0;j<rows.length;j+=CH){
+          const {error}=await SB.from('brand_sheets').upsert(rows.slice(j,j+CH));
+          if(error){console.error('saveInflCloud upsert',error);return;}
+        }
+      }
+      if(removed.length){
+        const {error}=await SB.from('brand_sheets').delete().in('id',removed);
+        if(error)console.error('saveInflCloud delete',error);
+      }
+      this._inflIds=currentIds;
+    }catch(e){ console.error('saveInflCloud',e); }
   },
   // Roster rows are split server-side into data (everything) + contact
   // (email/phone). We send contact back only if this user was allowed to see
@@ -1305,6 +1352,7 @@ const App={
         .on('postgres_changes',{event:'*',schema:'public',table:'profiles'},()=>{this._liveDirty=true;this.maybeRefresh();})
         .on('postgres_changes',{event:'*',schema:'public',table:'requests'},()=>{this._liveDirty=true;this.maybeRefresh();})
         .on('postgres_changes',{event:'*',schema:'public',table:'enquiries'},()=>{this._liveDirty=true;this.maybeRefresh();})
+        .on('postgres_changes',{event:'*',schema:'public',table:'brand_sheets'},()=>{this._liveDirty=true;this.maybeRefresh();})
         /* roster is deliberately NOT in the realtime publication — its payloads
            would bypass the contact-masking view. roster_sync() bumps a kv key
            instead, so the kv listener above covers roster changes too. */
