@@ -1014,6 +1014,9 @@ const App={
         this._kvFb.reqs=true;
       }
       this._reqIds = new Set(this.db.reqs.map(r=>r.id));
+      // Snapshot loaded rows so saveReqsCloud only re-sends CHANGED/NEW ones —
+      // never re-validating unrelated existing rows against the DB triggers.
+      this._reqSnap = {}; this.db.reqs.forEach(r=>{this._reqSnap[r.id]=JSON.stringify(this.stripMeta(r));});
 
       // Enquiries (role/team isolation enforced via RLS)
       try{
@@ -1086,34 +1089,42 @@ const App={
   async saveReqsCloud(){
     const currentIds=new Set(this.db.reqs.map(r=>r.id));
     const removed=[...(this._reqIds||[])].filter(id=>!currentIds.has(id));
+    this._reqSnap=this._reqSnap||{};
+    const toRow=r=>({
+      id:r.id,
+      team_id:r._teamId||this.userTeam(r.requesterId)||this.me.teamId||'default',
+      owner_id:r.requesterId||null,
+      assignee_id:r.assigneeId||null,
+      // owner_id/owner_team_id never change after insert (a DB trigger rejects it), sent as-is.
+      owner_team_id:r.ownerTeamId||(this.user(r.requesterId)||{}).teamUid||null,
+      routed_to_manager_id:r.routedToManagerId||null,
+      routed_by_id:r.routedById||null,
+      routed_at:r.routedAt?new Date(r.routedAt).toISOString():null,
+      assigned_to_id:r.assignedToId||r.assigneeId||null,
+      assigned_by_id:r.assignedById||null,
+      assigned_at:r.assignedAt?new Date(r.assignedAt).toISOString():null,
+      discovery_started_at:r.discoveryStartedAt?new Date(r.discoveryStartedAt).toISOString():null,
+      discovery_started_by:r.discoveryStartedBy||null,
+      discovery_ended_at:r.discoveryEndedAt?new Date(r.discoveryEndedAt).toISOString():null,
+      discovery_ended_by:r.discoveryEndedBy||null,
+      data:this.stripMeta(r),
+    });
     try{
-      if(this.db.reqs.length){
-        const rows=this.db.reqs.map(r=>({
-          id:r.id,
-          team_id:r._teamId||this.userTeam(r.requesterId)||this.me.teamId||'default',
-          owner_id:r.requesterId||null,
-          assignee_id:r.assigneeId||null,
-          // B6 two-hop chain. owner_id/owner_team_id never change after insert
-          // (a DB trigger rejects it), so they are sent as-is.
-          owner_team_id:r.ownerTeamId||(this.user(r.requesterId)||{}).teamUid||null,
-          routed_to_manager_id:r.routedToManagerId||null,
-          routed_by_id:r.routedById||null,
-          routed_at:r.routedAt?new Date(r.routedAt).toISOString():null,
-          assigned_to_id:r.assignedToId||r.assigneeId||null,
-          assigned_by_id:r.assignedById||null,
-          assigned_at:r.assignedAt?new Date(r.assignedAt).toISOString():null,
-          discovery_started_at:r.discoveryStartedAt?new Date(r.discoveryStartedAt).toISOString():null,
-          discovery_started_by:r.discoveryStartedBy||null,
-          discovery_ended_at:r.discoveryEndedAt?new Date(r.discoveryEndedAt).toISOString():null,
-          discovery_ended_by:r.discoveryEndedBy||null,
-          data:this.stripMeta(r),
-        }));
-        const {error}=await SB.from('requests').upsert(rows);
-        if(error){console.error('saveReqsCloud upsert',error);this.toast('Request not saved to server: '+(error.message||error),'err');}
+      // Upsert ONLY new/changed requests, one row at a time. A stale existing row
+      // that trips a DB trigger can no longer abort a freshly-raised request's save.
+      const failed=[];
+      for(const r of this.db.reqs){
+        const sig=JSON.stringify(this.stripMeta(r));
+        if(this._reqSnap[r.id]===sig)continue;              // unchanged → skip
+        const {error}=await SB.from('requests').upsert(toRow(r));
+        if(error){console.error('saveReqsCloud',r.id,error);failed.push(error);}
+        else this._reqSnap[r.id]=sig;
       }
+      if(failed.length){const e=failed[0];this.toast('Request not saved to server: '+(e.message||e),'err');}
       if(removed.length){
         const {error}=await SB.from('requests').delete().in('id',removed);
         if(error)console.error('saveReqsCloud delete',error);
+        removed.forEach(id=>delete this._reqSnap[id]);
       }
       this._reqIds=currentIds;
     }catch(e){ console.error('saveReqsCloud',e); }
