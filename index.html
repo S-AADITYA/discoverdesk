@@ -1557,7 +1557,7 @@ const App={
       dsearch:{ic:IC.disc,t:'Discovery Search'},
       calendar:{ic:IC.dash,t:'Content Calendar'},
       dashboard:{ic:IC.dash,t:'Overview'},
-      enquiries:{ic:IC.enq,t:'Enquiries',cnt:openEnq},
+      enquiries:{ic:IC.enq,t:'Brands',cnt:openEnq},
       requests:{ic:IC.req,t:'Requests',cnt:openReq},
       discovery:{ic:IC.disc,t:'My Discovery',cnt:myQ,hot:myQ>0},
       review:{ic:IC.review,t:'Review Queue',cnt:toReview,hot:toReview>0},
@@ -1871,8 +1871,8 @@ const App={
     E.sort((a,b)=>b.createdAt-a.createdAt);
     const eb=s=>({new:'b-new',qualified:'b-qualified',proposal:'b-proposal',won:'b-won',lost:'b-lost'}[s]||'b-draft');
     this.set(`
-      <div class="pagehead"><div class="lead"><h2>Enquiries</h2><p>${E.length} logged · convert a qualified enquiry into a discovery request</p></div>
-        <div class="acts">${this.canExport()?`<button class="btn ghost" onclick="App.exportEnq()">${svg(IC.down,15)} Export</button>`:''}<button class="btn primary" onclick="App.openNewEnq()">${svg(IC.plus,16)} Log enquiry</button></div></div>
+      <div class="pagehead"><div class="lead"><h2>Brands</h2><p>${E.length} logged · convert a qualified brand into a discovery request</p></div>
+        <div class="acts">${this.canExport()?`<button class="btn ghost" onclick="App.exportEnq()">${svg(IC.down,15)} Export</button>`:''}<button class="btn primary" onclick="App.openNewEnq()">${svg(IC.plus,16)} Register brand</button></div></div>
       ${(()=>{const all=this.myEnq();const cnt=s=>all.filter(e=>e.status===s).length;const open=all.filter(e=>!['won','lost'].includes(e.status)).length;const won=cnt('won');const closed=won+cnt('lost');const conv=closed?Math.round(won/closed*100):0;return `<div class="card pad" style="margin-bottom:16px"><div class="metric-row"><div class="m"><div class="v"><span class="cup" data-to="${all.length}">0</span></div><div class="l">Total</div></div><div class="m"><div class="v"><span class="cup" data-to="${open}">0</span></div><div class="l">Open</div></div><div class="m"><div class="v"><span class="cup" data-to="${cnt('qualified')}">0</span></div><div class="l">Qualified</div></div><div class="m"><div class="v"><span class="cup" data-to="${cnt('proposal')}">0</span></div><div class="l">Proposal</div></div><div class="m"><div class="v" style="color:var(--success)"><span class="cup" data-to="${won}">0</span></div><div class="l">Won</div></div><div class="m"><div class="v"><span class="cup" data-to="${conv}" data-suf="%">0%</span></div><div class="l">Win rate</div></div></div></div>`;})()}
       <div class="toolbar">${[['all','All'],['new','New'],['qualified','Qualified'],['proposal','Proposal'],['won','Won'],['lost','Lost']].map(([k,l])=>`<span class="chip ${(this._efilter||'all')===k?'on':''}" onclick="App._efilter='${k}';App.vEnquiries()">${l}</span>`).join('')}</div>
       <div class="card">${E.length?`<div class="tblwrap"><table class="tbl fixed"><thead><tr><th class="c-brand">Client</th><th class="c-camp">Campaign</th><th class="c-who">Service</th><th class="c-num">Budget</th><th class="c-who">Owner</th><th class="c-status">Source</th><th class="c-status">Status</th><th class="c-when">Logged</th><th style="width:44px"></th></tr></thead><tbody>
@@ -1883,10 +1883,10 @@ const App={
           <td><span class="badge ${eb(e.status)}"><span class="d"></span>${e.status}</span></td>
           <td class="cellsub">${fmtDate(e.createdAt)}</td>
           <td style="text-align:right">${this.can('raise')&&!['won','lost'].includes(e.status)?`<button class="btn primary xs" onclick="event.stopPropagation();App.convertEnq('${e.id}')">→ Request</button>`:''}</td>
-        </tr>`).join('')}</tbody></table></div>`:this.emptyBox('No enquiries yet','Log your first client enquiry to start the pipeline.',`<button class="btn primary" onclick="App.openNewEnq()">${svg(IC.plus,16)} Log enquiry</button>`)}</div>`);
+        </tr>`).join('')}</tbody></table></div>`:this.emptyBox('No brands yet','Register your first brand to start the pipeline.',`<button class="btn primary" onclick="App.openNewEnq()">${svg(IC.plus,16)} Register brand</button>`)}</div>`);
   },
   openNewEnq(){
-    this.modal(`<div class="mhead"><div><h3>Log enquiry</h3><p>Capture new business coming into Sales / KAM</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div>
+    this.modal(`<div class="mhead"><div><h3>Register brand</h3><p>Capture new business coming into Sales / KAM</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div>
       <div class="mbody">
         <div class="frow"><div class="field"><label>Client / brand name</label><input class="inp" id="e_client"></div><div class="field"><label>Contact (email / person)</label><input class="inp" id="e_contact"></div></div>
         <div class="frow three"><div class="field"><label>Service</label><input class="inp" id="e_service" value="Influencer campaign"></div><div class="field"><label>Budget</label><input class="inp" id="e_budget" placeholder="₹2–4L"></div><div class="field"><label>Source</label><select class="inp" id="e_source"><option>Inbound</option><option>Referral</option><option>Outbound</option><option>Event</option></select></div></div>
@@ -1910,10 +1910,21 @@ const App={
         <div class="actbar" style="margin-top:16px">
           ${this.can('raise')&&!['won','lost'].includes(e.status)?`<button class="btn primary sm" onclick="App.convertEnq('${e.id}')">${svg(IC.req,15)} Convert to request</button>`:''}
           ${e.contact&&e.contact.includes('@')?`<button class="btn ghost sm" onclick="App.emailEnq('${e.id}')">${svg(IC.mail,15)} Email client</button>`:''}
+          ${(deptOf(this.me)==='sales'||deptOf(this.me)==='kam'||this.can('admin'))?`<button class="btn ghost sm" onclick="App.transferEnqModal('${e.id}')">${svg(IC.people,15)} Transfer to KAM</button>`:''}
+          ${this.can('admin')?`<button class="btn ghost sm" style="color:var(--danger)" onclick="App.delEnq('${e.id}')">${svg(IC.x,15)} Delete</button>`:''}
         </div>
       </div>`);
   },
   async setEnqStatus(id,s){const e=this.db.enq.find(x=>x.id===id);e.status=s;await this.save('enq');this.toast('Status updated','ok');this.renderNav();this.openEnq(id);},
+  async delEnq(id){if(!this.can('admin'))return this.toast('Only Admin can delete','err');this.db.enq=this.db.enq.filter(x=>x.id!==id);await this.save('enq');this.closeAll();this.toast('Deleted','ok');this.renderNav();this.vEnquiries();},
+  transferEnqModal(id){
+    const kams=this.db.users.filter(u=>u.status==='active'&&deptOf(u)==='kam');
+    if(!kams.length)return this.toast('No active KAM users to transfer to','err');
+    this.modal(`<div class="mhead"><div><h3>Transfer to KAM</h3><p>Hand this brand to a Key Account Manager</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div>
+      <div class="mbody"><div class="field"><label>KAM owner</label><select class="inp" id="tk_user">${kams.map(u=>`<option value="${u.id}">${esc(u.name)} · ${ROLES[roleKey(u)]}</option>`).join('')}</select></div></div>
+      <div class="mfoot"><button class="btn ghost" onclick="App.closeAll()">Cancel</button><button class="btn primary" onclick="App.transferEnqToKam('${id}')">Transfer</button></div>`);
+  },
+  async transferEnqToKam(id){const e=this.db.enq.find(x=>x.id===id);if(!e)return;const uid2=document.getElementById('tk_user').value;const u=this.user(uid2);if(!u)return this.toast('Pick a KAM user','err');e.ownerId=uid2;await this.save('enq');this.closeAll();this.toast('Transferred to '+u.name,'ok');this.renderNav();this.vEnquiries();},
   emailEnq(id){const e=this.db.enq.find(x=>x.id===id);const url='mailto:'+encodeURIComponent(e.contact)+'?subject='+encodeURIComponent('Following up — '+e.service)+'&body='+encodeURIComponent('Hi,\n\nThanks for your interest in working with us on '+e.service+'. We\'d love to share some sample creator profiles.\n\nBest,\n'+this.me.name);window.open(url,'_blank');},
   convertEnq(id){const e=this.db.enq.find(x=>x.id===id);this.closeAll();this.openNewReq({client:'new',brandName:e.client,niche:e.service,enqId:id});},
   exportEnq(){this.export(this.db.enq.map(e=>({Client:e.client,Contact:e.contact,Service:e.service,Budget:e.budget,Source:e.source,Owner:this.user(e.ownerId)?.name,Status:e.status,Logged:fmtDate(e.createdAt),Notes:e.notes})),'enquiries.xlsx');},
@@ -1991,7 +2002,7 @@ const App={
         <div class="field"><label>Priority</label><div class="role-pick three"><div class="r" data-pri="low" onclick="App.pickPri('low')">Low</div><div class="r on" data-pri="med" onclick="App.pickPri('med')">Medium</div><div class="r" data-pri="high" onclick="App.pickPri('high')">High</div></div></div>
         <div class="frow"><div class="field"><label>Brand budget (₹)</label><input class="inp" id="nq_budget" type="number" placeholder="what the client pays"></div>${this.can('bridge')?`<div class="field"><label>Internal cost est. (₹)</label><input class="inp" id="nq_icost" type="number" placeholder="your cost"></div>`:''}</div>
         <div class="frow"><div class="field"><label>Deadline</label><input class="inp" id="nq_deadline" type="date"></div>
-          <div class="field"><label>Assign to ${this.can('assign')?'':'<span class="hint" style="display:inline">(admin assigns)</span>'}</label><select class="inp" id="nq_assignee" ${this.can('assign')?'':'disabled'}><option value="">Unassigned</option>${this.db.users.filter(u=>u.role==='discovery'&&u.status==='active').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></div></div>
+          <div class="field"><label>${this.can('assign')?'Assign to Discovery':'Assign to Discovery Manager <span style="color:var(--danger)">*</span>'}</label><select class="inp" id="nq_assignee">${this.can('assign')?`<option value="">Unassigned</option>`+this.db.users.filter(u=>u.role==='discovery'&&u.status==='active').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join(''):`<option value="">— select a Discovery Manager —</option>`+this.db.users.filter(u=>roleKey(u)==='discovery_manager'&&u.status==='active').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></div></div>
       </div>
       <div class="mfoot"><button class="btn ghost" onclick="App.submitReq(true)">Save draft</button><button class="btn primary" onclick="App.submitReq(false)">Raise request</button></div>`);
     this._client=pre.client==='new'?'new':'existing';this._enqId=pre.enqId||null;this._pri='med';
@@ -4884,7 +4895,7 @@ Object.assign(App,{
 
   /* ---------------- ENQUIRY: campaign name ---------------- */
   openNewEnq(){
-    this.modal(`<div class="mhead"><div><h3>Log enquiry</h3><p>Capture new business coming into Sales / KAM</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div>
+    this.modal(`<div class="mhead"><div><h3>Register brand</h3><p>Capture new business coming into Sales / KAM</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div>
       <div class="mbody">
         <div class="frow"><div class="field"><label>Client / brand name <span style="color:var(--danger)">*</span></label><input class="inp" id="e_client"></div><div class="field"><label>Campaign name <span style="color:var(--danger)">*</span></label><input class="inp" id="e_campaign" placeholder="e.g. Diwali 2026, Store Launch BLR"></div></div>
         <div class="frow"><div class="field"><label>Contact (email / person)</label><input class="inp" id="e_contact"></div><div class="field"><label>Service</label><input class="inp" id="e_service" value="Influencer campaign"></div></div>
@@ -4935,7 +4946,7 @@ Object.assign(App,{
         <div class="field"><label>Priority</label><div class="role-pick three"><div class="r" data-pri="low" onclick="App.pickPri('low')">Low</div><div class="r on" data-pri="med" onclick="App.pickPri('med')">Medium</div><div class="r" data-pri="high" onclick="App.pickPri('high')">High</div></div></div>
         <div class="frow"><div class="field"><label>Brand budget (₹)</label><input class="inp" id="nq_budget" type="number" placeholder="what the client pays"></div>${this.can('bridge')?`<div class="field"><label>Internal cost est. (₹)</label><input class="inp" id="nq_icost" type="number" placeholder="your cost"></div>`:''}</div>
         <div class="frow"><div class="field"><label>Deadline</label><input class="inp" id="nq_deadline" type="date"></div>
-          <div class="field"><label>Assign to ${this.can('assign')?'':'<span class="hint" style="display:inline">(admin assigns)</span>'}</label><select class="inp" id="nq_assignee" ${this.can('assign')?'':'disabled'}><option value="">Unassigned</option>${this.db.users.filter(u=>u.role==='discovery'&&u.status==='active').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></div></div>
+          <div class="field"><label>${this.can('assign')?'Assign to Discovery':'Assign to Discovery Manager <span style="color:var(--danger)">*</span>'}</label><select class="inp" id="nq_assignee">${this.can('assign')?`<option value="">Unassigned</option>`+this.db.users.filter(u=>u.role==='discovery'&&u.status==='active').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join(''):`<option value="">— select a Discovery Manager —</option>`+this.db.users.filter(u=>roleKey(u)==='discovery_manager'&&u.status==='active').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></div></div>
       </div>
       <div class="mfoot"><button class="btn ghost" onclick="App.submitReq(true)">Save draft</button><button class="btn primary" onclick="App.submitReq(false)">Raise request</button></div>`);
     this._client=pre.client==='new'?'new':'existing';this._enqId=pre.enqId||null;this._pri='med';this._reqPicks=[];
@@ -4988,6 +4999,9 @@ Object.assign(App,{
       campId=nc.id;campName=cn;
     } else campName=this.campName(campId);
     const type=document.getElementById('nq_type').value,assignee=document.getElementById('nq_assignee').value||null,dlv=document.getElementById('nq_deadline').value;
+    // Sales/KAM (no 'assign' perm) MUST route to a Discovery Manager (hop 1); managers/admin assign a Discovery Employee directly.
+    const isRaiser=!this.can('assign');
+    if(isRaiser&&!draft&&!assignee)return this.toast('Assign a Discovery Manager to raise this request','err');
     const r={id:await this.nextSeq('REQ'),seq:this.db.reqs.length+1,brandId,brandName,campaignId:campId,campaignName:campName,client:this._client,reqType:type,
       round:type==='sample'?1:+document.getElementById('nq_round').value,
       sampleRound:+document.getElementById('nq_round').value||1,
@@ -5001,8 +5015,10 @@ Object.assign(App,{
       internalCost:this.can('bridge')?(+((document.getElementById('nq_icost')||{}).value)||0):0,
       deadline:dlv?new Date(dlv).getTime():null,requesterId:this.me.id,
       suggestedCreators:(this._reqPicks||[]).map(pid=>{const c=(this.db.roster||[]).find(x=>x.id===pid);return c?{handle:c.handle,name:c.name,followers:c.followers,category:c.category,cats:this.catsText(c),city:c.city,source:'sales-suggested',addedBy:this.me.id,addedByName:this.me.name,addedByRole:this.me.role,reason:'Client requested',addedAt:now()}:null;}).filter(Boolean),
-      assigneeId:assignee,status:draft?'draft':'assigned',createdAt:now(),updatedAt:now(),
-      assignedAt:assignee?now():(draft?null:now()),startedAt:null,submittedAt:null,
+      assigneeId:isRaiser?null:assignee,
+      routedToManagerId:isRaiser?assignee:null,routedById:(isRaiser&&assignee)?this.me.id:null,routedAt:(isRaiser&&assignee)?now():null,
+      status:draft?'draft':'assigned',createdAt:now(),updatedAt:now(),
+      assignedAt:(!isRaiser&&assignee)?now():(draft?null:now()),startedAt:null,submittedAt:null,
       discoveryStartedAt:null,discoveryEndedAt:null,closed:false,rounds:[],events:[]};
     this.pushEvent(r,draft?'Draft created':`Request raised for ${brandName} · ${campName}`,'create');
     this.audit('req.create','req:'+r.id,{name:brandName,campaign:campName});
