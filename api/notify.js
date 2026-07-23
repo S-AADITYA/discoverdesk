@@ -16,18 +16,23 @@ module.exports = async (req, res) => {
   try {
     // Vercel parses JSON bodies automatically; fall back just in case.
     const body = typeof req.body === 'object' && req.body ? req.body : JSON.parse(req.body || '{}');
-    const { to, subject, text } = body;
-    if (!to) return res.status(400).json({ error: 'missing recipient' });
+    const { to, cc, subject, text } = body;
+    const toArr = Array.isArray(to) ? to.filter(Boolean) : (to ? [to] : []);
+    const ccArr = Array.isArray(cc) ? cc.filter(Boolean) : (cc ? [cc] : []);
+    if (!toArr.length && !ccArr.length) return res.status(400).json({ error: 'missing recipient' });
+
+    const payload = {
+      from,
+      to: toArr.length ? toArr : ccArr.slice(0, 1), // Resend requires at least one `to`
+      subject: subject || 'DiscoverDesk',
+      text: text || '',
+    };
+    if (ccArr.length) payload.cc = ccArr;
 
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        from,
-        to: [to],
-        subject: subject || 'DiscoverDesk',
-        text: text || '',
-      }),
+      body: JSON.stringify(payload),
     });
     const data = await r.json();
     return res.status(200).json({ ok: r.ok, data });

@@ -1469,6 +1469,8 @@ const App={
   canExport(){return this.can('export')&&this.view==='roster';},
   // Adding creators to the roster is restricted to the Discovery Manager (+admin).
   canAddRoster(){return this.roleKey()==='discovery_manager'||this.can('admin');},
+  // Only a PERMANENT admin (a locked admin account) may delete anything.
+  isPermAdmin(){return this.can('admin')&&!!(this.me&&this.me.locked);},
   // When Discovery adds a creator it lands in the roster AND is appended to a
   // separate submissions log (who added what, when) in stored data.
   async logRosterSubmission(rec){if(!SB||!rec)return;try{await SB.from('roster_submissions').insert({
@@ -1535,8 +1537,8 @@ const App={
       return e.ownerId===this.me.id||this.inMyScope(this.user(e.ownerId));
     return e.ownerId===this.me.id;
   },
-  myReqs(){return (this.db.reqs||[]).filter(r=>this.visReq(r));},
-  myEnq(){return (this.db.enq||[]).filter(e=>this.visEnq(e));},
+  myReqs(){return (this.db.reqs||[]).filter(r=>!r.deletedAt&&this.visReq(r));},
+  myEnq(){return (this.db.enq||[]).filter(e=>!e.deletedAt&&this.visEnq(e));},
   myPeople(){return (this.db.users||[]).filter(u=>this.visPerson(u));},
   effPerms(u){const base=ROLE_DEFAULTS[u.role]||{};const out={};ALL_PERMS.forEach(([k])=>{out[k]=u.perms&&u.perms[k]!==undefined&&u.perms[k]!==null?!!u.perms[k]:!!base[k];});return out;},
 
@@ -1659,6 +1661,34 @@ const App={
     }
   },
   mailto(n){if(!n.email)return;const url='mailto:'+encodeURIComponent(n.email.to)+'?subject='+encodeURIComponent(n.email.subject)+'&body='+encodeURIComponent(n.email.body);window.open(url,'_blank');},
+  /* ---- Discovery mail chain ----
+     One thread per campaign. Subject is stable so email clients group replies.
+     TO = the requester (Sales/KAM) + the assigned discovery person.
+     CC = every permanent admin, all admins, the Sales head (sales_manager),
+          the KAM head (kam_manager) and the Discovery Manager(s). */
+  mailChainSubject(r){return `MHS <> ${r.brandName||'Brand'} <> ${r.campaignName||this.campName?.(r.campaignId)||'Campaign'} -- Discovery Mail Chain`;},
+  mailRecipients(r){
+    const active=this.db.users.filter(u=>u.status==='active'&&u.email);
+    const to=[];
+    const owner=this.user(r.requesterId); if(owner&&owner.email)to.push(owner.email);
+    const disc=(r.assigneeId||r.assignedToId)&&this.user(r.assigneeId||r.assignedToId); if(disc&&disc.email)to.push(disc.email);
+    const cc=new Set();
+    active.forEach(u=>{const k=roleKey(u);
+      if((k==='admin')||(k==='admin'&&u.locked)||k==='sales_manager'||k==='kam_manager'||k==='discovery_manager')cc.add(u.email);});
+    const toSet=new Set(to); toSet.forEach(e=>cc.delete(e));
+    return {to:[...toSet],cc:[...cc]};
+  },
+  async sendMailChain(r,phase){
+    if(!CLOUD||!r)return;
+    const {to,cc}=this.mailRecipients(r); if(!to.length&&!cc.length)return;
+    const subject=this.mailChainSubject(r);
+    const who=this.user(r.requesterId)?.name||'—';
+    const body=phase==='raised'
+      ?`A new discovery request has been raised.\n\nBrand: ${r.brandName}\nCampaign: ${r.campaignName||'—'}\nNiche: ${r.niche||'—'}\nProfiles needed: ${r.qty||'—'}\nDeadline: ${r.deadline?fmtDate(r.deadline):'TBD'}\nRaised by: ${who}\n\nReply on this thread to keep the whole discovery conversation for this campaign in one place.`
+      :`Discovery profiles have been submitted for review.\n\nBrand: ${r.brandName}\nCampaign: ${r.campaignName||'—'}\nRound: ${(r.rounds&&r.rounds.length)||1}\nDelivered by: ${this.user(r.assigneeId)?.name||'—'}\nRequested by: ${who}\n\nReply on this thread.`;
+    try{await fetch(API('/api/notify'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,cc,subject,text:body})});}
+    catch(e){console.error('sendMailChain',e);}
+  },
 
   /* ---- exports ---- */
   export(rows,filename){
@@ -1911,12 +1941,12 @@ const App={
           ${this.can('raise')&&!['won','lost'].includes(e.status)?`<button class="btn primary sm" onclick="App.convertEnq('${e.id}')">${svg(IC.req,15)} Convert to request</button>`:''}
           ${e.contact&&e.contact.includes('@')?`<button class="btn ghost sm" onclick="App.emailEnq('${e.id}')">${svg(IC.mail,15)} Email client</button>`:''}
           ${(deptOf(this.me)==='sales'||deptOf(this.me)==='kam'||this.can('admin'))?`<button class="btn ghost sm" onclick="App.transferEnqModal('${e.id}')">${svg(IC.people,15)} Transfer to KAM</button>`:''}
-          ${this.can('admin')?`<button class="btn ghost sm" style="color:var(--danger)" onclick="App.delEnq('${e.id}')">${svg(IC.x,15)} Delete</button>`:''}
+          ${this.isPermAdmin()?`<button class="btn ghost sm" style="color:var(--danger)" onclick="App.delEnq('${e.id}')">${svg(IC.x,15)} Delete</button>`:''}
         </div>
       </div>`);
   },
   async setEnqStatus(id,s){const e=this.db.enq.find(x=>x.id===id);e.status=s;await this.save('enq');this.toast('Status updated','ok');this.renderNav();this.openEnq(id);},
-  async delEnq(id){if(!this.can('admin'))return this.toast('Only Admin can delete','err');this.db.enq=this.db.enq.filter(x=>x.id!==id);await this.save('enq');this.closeAll();this.toast('Deleted','ok');this.renderNav();this.vEnquiries();},
+  async delEnq(id){if(!this.isPermAdmin())return this.toast('Only the permanent admin can delete','err');this.db.enq=this.db.enq.filter(x=>x.id!==id);await this.save('enq');this.closeAll();this.toast('Deleted','ok');this.renderNav();this.vEnquiries();},
   transferEnqModal(id){
     const kams=this.db.users.filter(u=>u.status==='active'&&deptOf(u)==='kam');
     if(!kams.length)return this.toast('No active KAM users to transfer to','err');
@@ -3654,7 +3684,7 @@ const App={
       <div class="frow"><div class="field"><label>Followers</label><input class="inp" id="ro_f" type="number" value="${r.followers||''}"></div><div class="field"><label>Engagement</label><input class="inp" id="ro_e" value="${esc(r.eng||'')}" placeholder="3.2%"></div></div>
       <div class="frow"><div class="field"><label>Category</label><input class="inp" id="ro_c" value="${esc(r.category||'')}" placeholder="Fashion"></div><div class="field"><label>City</label><input class="inp" id="ro_city" value="${esc(r.city||'')}"></div><div class="field"><label>Email</label><input class="inp" id="ro_email" type="email" value="${esc(r.email||'')}" placeholder="creator@email.com"></div></div>
       <div class="frow"><div class="field"><label>Brand cost (₹)</label><input class="inp" id="ro_bc" type="number" value="${r.brandCost||''}"></div>${this.can('bridge')?`<div class="field"><label>Internal cost (₹)</label><input class="inp" id="ro_ic" type="number" value="${r.internalCost||''}"></div>`:''}</div></div>
-      <div class="mfoot">${id&&this.can('admin')?`<button class="btn ghost" style="margin-right:auto;color:var(--danger)" onclick="App.delRoster('${id}')">Delete</button>`:''}<button class="btn ghost" onclick="App.closeAll()">Cancel</button><button class="btn primary" onclick="App.saveRoster('${id||''}')">Save</button></div>`);
+      <div class="mfoot">${id&&this.isPermAdmin()?`<button class="btn ghost" style="margin-right:auto;color:var(--danger)" onclick="App.delRoster('${id}')">Delete</button>`:''}<button class="btn ghost" onclick="App.closeAll()">Cancel</button><button class="btn primary" onclick="App.saveRoster('${id||''}')">Save</button></div>`);
   },
   async saveRoster(id){const h=this.cnorm(document.getElementById('ro_h').value);if(!h)return this.toast('Handle required','err');
     if(!id&&!this.canAddRoster())return this.toast('Only the Discovery Manager can add creators','err');
@@ -3662,7 +3692,7 @@ const App={
     if(id){const ex=this.db.roster.find(x=>x.id===id);const changed=Object.keys(rec).filter(k=>ex[k]!==rec[k]&&typeof rec[k]!=='object').slice(0,4);Object.assign(ex,rec);this.audit('creator.edit','creator:'+h,{handle:h,name:rec.name,field:changed.join(', ')});}else{this.db.roster.push({id:uid(),...rec,addedAt:now(),addedBy:this.me.id});this.audit('creator.add','creator:'+h,{handle:h,name:rec.name,source:'manual'});}
     await this.save('roster');this.closeAll();this.toast('Saved','ok');this.vRoster();
   },
-  async delRoster(id){if(!this.can('admin'))return this.toast('Only Admin can delete','err');const _dr=this.db.roster.find(x=>x.id===id);if(_dr)this.audit('creator.delete','creator:'+_dr.handle,{handle:_dr.handle,name:_dr.name});this.db.roster=this.db.roster.filter(x=>x.id!==id);await this.save('roster');this.closeAll();this.toast('Deleted','ok');this.vRoster();},
+  async delRoster(id){if(!this.isPermAdmin())return this.toast('Only the permanent admin can delete','err');const _dr=this.db.roster.find(x=>x.id===id);if(_dr)this.audit('creator.delete','creator:'+_dr.handle,{handle:_dr.handle,name:_dr.name});this.db.roster=this.db.roster.filter(x=>x.id!==id);await this.save('roster');this.closeAll();this.toast('Deleted','ok');this.vRoster();},
   exportRoster(){if(!this.canExport())return this.toast('Only Admin can export, from the Roster module','err');this.export((this.db.roster||[]).map(r=>({Handle:'@'+r.handle,Platform:r.platform,Followers:r.followers,Engagement:r.eng,Category:r.category,City:r.city,BrandCost:r.brandCost,InternalCost:r.internalCost})),'roster.xlsx');},
   rosterTemplate(){this.export([{handle:'creatorname',name:'Full Name',platform:'Instagram',followers:120000,engagement:'4.2%',category:'Fashion',city:'Mumbai',country:'India',language:'Hindi, English',price_type:'priced',reel_cost:60000,video_story:20000,store_visit:30000,brand_cost:90000,internal_cost:54000,email:'name@email.com',phone:'+91...'}],'roster_upload_template.xlsx');this.toast('Template downloaded — fill it and use Import','ok');},
   helpTour(){
@@ -3719,7 +3749,7 @@ const App={
       </div><div class="mfoot"><button class="btn primary" onclick="App.closeAll()">Done</button></div>`);
   },
   async keepOne(id,gi){const {groups}=this.rosterDupes();const g=groups[gi];if(!g)return;const remove=g.records.filter(r=>r.id!==id).map(r=>r.id);this.db.roster=this.db.roster.filter(r=>!remove.includes(r.id));await this.save('roster');this.toast('Merged — removed '+remove.length,'ok');this.duplicatesModal();},
-  async delRosterDup(id){if(!this.can('admin'))return this.toast('Only Admin can delete','err');this.db.roster=this.db.roster.filter(r=>r.id!==id);await this.save('roster');this.toast('Deleted','ok');this.duplicatesModal();},
+  async delRosterDup(id){if(!this.isPermAdmin())return this.toast('Only the permanent admin can delete','err');this.db.roster=this.db.roster.filter(r=>r.id!==id);await this.save('roster');this.toast('Deleted','ok');this.duplicatesModal();},
 
   /* ================= ROSTER BRIDGE (P&L) ================= */
   vBridge(){
@@ -3999,7 +4029,7 @@ const App={
     else{this.db.infl.push({id:uid(),brandId:bid,addedBy:this.me.id,addedAt:now(),...data});}
     await this.save('infl');this.closeAll();this.toast('Saved','ok');this.vInfluencers();
   },
-  async delInfl(id){if(!this.can('admin'))return this.toast('Only Admin can delete','err');this.db.infl=this.db.infl.filter(x=>x.id!==id);await this.save('infl');this.closeAll();this.toast('Removed','ok');this.vInfluencers();},
+  async delInfl(id){if(!this.isPermAdmin())return this.toast('Only the permanent admin can delete','err');this.db.infl=this.db.infl.filter(x=>x.id!==id);await this.save('infl');this.closeAll();this.toast('Removed','ok');this.vInfluencers();},
   importInflPrompt(bid){document.getElementById('inflFile').click();},
   importInfl(ev,bid){
     const f=ev.target.files[0];if(!f)return;const reader=new FileReader();
@@ -4785,6 +4815,7 @@ Object.assign(App,{
     this.toast(`Round ${rd.round} submitted — ${rd.total} profiles sent for selection`,'ok');
     this.renderNav();this.openReq(reqId);
     this.fireWebhook('round.submitted',{id:r.id,brand:r.brandName,campaign:this.campName(r.campaignId),round:rd.round,profiles:rd.total,by:this.me.name});
+    this.sendMailChain(r,'sheet');
   },
 
   /* upload merges INTO the open round instead of creating a new one */
@@ -5031,6 +5062,7 @@ Object.assign(App,{
     await this.save('reqs');this.syncActsLocal();await this.save('acts');
     this.closeAll();this.toast(draft?'Saved as draft':`Request raised for ${campName} 🎯`,'ok');this.renderNav();this.go('requests');
     if(!draft)this.fireWebhook('request.raised',{id:r.id,brand:brandName,campaign:campName,niche,type,round:r.round,requester:this.me.name});
+    if(!draft)this.sendMailChain(r,'raised');
   },
 
   /* ---------------- REQUEST DETAIL ---------------- */
@@ -5377,7 +5409,7 @@ Object.assign(App,{
       <div class="frow"><div class="field"><label>Primary category</label><input class="inp" id="ro_c" value="${esc(r.category||'')}" placeholder="Fashion"></div><div class="field"><label>Brand types they fit</label><input class="inp" id="ro_btype" value="${esc((r.brandTypes||[]).join(', '))}" placeholder="D2C skincare, QSR, Fintech"></div></div>
       <div class="frow"><div class="field"><label>City</label><input class="inp" id="ro_city" value="${esc(r.city||'')}"></div><div class="field"><label>Email</label><input class="inp" id="ro_email" type="email" value="${esc(r.email||'')}" placeholder="creator@email.com"></div></div>
       <div class="frow"><div class="field"><label>Brand cost (₹)</label><input class="inp" id="ro_bc" type="number" value="${r.brandCost||''}"></div>${this.can('bridge')?`<div class="field"><label>Internal cost (₹)</label><input class="inp" id="ro_ic" type="number" value="${r.internalCost||''}"></div>`:''}</div></div>
-      <div class="mfoot">${id&&this.can('admin')?`<button class="btn ghost" style="margin-right:auto;color:var(--danger)" onclick="App.delRoster('${id}')">Delete</button>`:''}<button class="btn ghost" onclick="App.closeAll()">Cancel</button><button class="btn primary" onclick="App.saveRoster('${id||''}')">Save</button></div>`);
+      <div class="mfoot">${id&&this.isPermAdmin()?`<button class="btn ghost" style="margin-right:auto;color:var(--danger)" onclick="App.delRoster('${id}')">Delete</button>`:''}<button class="btn ghost" onclick="App.closeAll()">Cancel</button><button class="btn primary" onclick="App.saveRoster('${id||''}')">Save</button></div>`);
   },
   async saveRoster(id){
     const g=i=>(document.getElementById(i)||{value:''}).value.trim();
