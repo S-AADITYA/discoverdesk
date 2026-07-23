@@ -3378,7 +3378,7 @@ const App={
   async syncSheets(){
     if(!CLOUD)return this.toast('Deploy the scale-pack, then Sheets sync runs automatically every 30 min (and on demand)','err');
     this.toast('Syncing with Google Sheets…','ok');
-    try{const r=await fetch(API('/api/sheets-sync'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'both'})});const d=await r.json();if(d.ok)this.toast(`Synced · ${d.pulled||0} in, ${d.pushed||0} out`,'ok');else this.toast('Sync: '+(d.error||'check config'),'err');}catch(e){this.toast('Could not reach /api/sheets-sync','err');}
+    try{const r=await fetch(API('/api/sheets-sync'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'both'})});const d=await r.json();if(d.ok){this.toast(`Synced · ${d.pulled||0} in (${d.created||0} new, ${d.updated||0} updated), ${d.pushed||0} out`,'ok');this._lastLocalSave=Date.now();await this.load();this.renderNav();if(this.view==='roster')this.go('roster');}else this.toast('Sync: '+(d.error||'check config'),'err');}catch(e){this.toast('Could not reach /api/sheets-sync','err');}
   },
   scores(r){
     const eng=parseFloat(r.eng)||0;const followers=+r.followers||1;
