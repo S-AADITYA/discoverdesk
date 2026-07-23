@@ -1711,6 +1711,8 @@ const App={
         }
         this.db.roster = out.map(row=>({ ...row.data, ...(row.contact||{}), id:row.id, _cmask:!row.contact_visible }));
         this._kvFb.roster=false; this._rosterErr=false;
+        // True total (the cache is capped) — for an accurate "Total creators".
+        try{ const cr=await SB.from('roster_v').select('id',{count:'exact',head:true}); this._rosterTotal=cr.count||this.db.roster.length; }catch{ this._rosterTotal=this.db.roster.length; }
       }catch(e){
         console.error('roster load failed:',e&&e.message);
         this._rosterErr=true; this._kvFb.roster=true;
@@ -3412,7 +3414,7 @@ const App={
       else if(tab==='dashboard')html=this.rosterDash();
       else html=await this.rosterAll();                            // browse=cache, search=server-side
     }catch(e){ html=`<div class="notice">${svg(IC.bolt,15)}<div>Could not load roster: ${esc(e&&e.message||e)}</div></div>`; }
-    const el=document.getElementById('rBody'); if(el)el.innerHTML=html;
+    const el=document.getElementById('rBody'); if(el){el.innerHTML=html;this.animateCounts();this.animateProgress&&this.animateProgress();}
   },
   // Live health check of the Google Sheets link (fast; no sync). Updates the badge.
   async checkSheetsLink(){
@@ -3433,7 +3435,7 @@ const App={
     const seg=[['With price',priced.length,'#0ea472'],['Barter',barter.length,'#e0900a'],['No price',none.length,'#8a8a9a']];const tot=R.length||1;let acc=0;const donut=seg.map(([l,v,c])=>{const s=acc/tot*360;acc+=v;return `${c} ${s}deg ${acc/tot*360}deg`;}).join(',');
     const kpi=(l,v,sub)=>`<div class="card pad"><div class="l" style="font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)">${l}</div><div style="font-family:var(--disp);font-size:30px;font-weight:600;margin-top:6px">${v}</div><div class="cellsub" style="margin-top:4px">${sub}</div></div>`;
     return `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,260px));gap:16px;margin-bottom:16px">
-      ${kpi('Total creators','<span class="cup" data-to="'+R.length+'">0</span>',priced.length+' priced · '+barter.length+' barter')}
+      ${kpi('Total creators','<span class="cup" data-to="'+(this._rosterTotal||R.length)+'">0</span>',(this._rosterTotal&&this._rosterTotal>R.length)?('charts on a '+nfmt(R.length)+' sample · search covers all'):(priced.length+' priced · '+barter.length+' barter'))}
       ${kpi('Avg reel cost','\u20b9'+(avgReel>=1000?Math.round(avgReel/1000)+'K':avgReel),'across priced creators')}
       ${kpi('Combined reach',nfmt(reach),'total followers')}
       ${kpi('Live campaign budget','\u2014','0 executions')}
@@ -3520,7 +3522,7 @@ const App={
       <select class="inp" style="width:auto" onchange="App.setRF('member',this.value)"><option value="">All members</option>${members.map(m=>`<option value="${m}" ${f.member===m?'selected':''}>${esc(this.user(m)?.name||'\u2014')}</option>`).join('')}</select>
       <select class="inp" style="width:auto" onchange="App.setRF('sort',this.value)"><option value="followers">\u2193 Followers</option><option value="eng" ${sort==='eng'?'selected':''}>\u2193 Engagement</option><option value="quality" ${sort==='quality'?'selected':''}>\u2193 Quality</option><option value="reel" ${sort==='reel'?'selected':''}>\u2193 Reel cost</option></select>
       <button class="btn ghost sm" onclick="App.advFiltersModal()">${svg(IC.disc,14)} More filters${advN?` (${advN})`:''}</button>
-      <span style="flex:1"></span><span class="cellsub">${nfmt(total)} creators</span></div>
+      <span style="flex:1"></span><span class="cellsub">${nfmt(total)} shown${(this._rosterTotal&&this._rosterTotal>total)?` · use Search to reach all ${nfmt(this._rosterTotal)}`:''}</span></div>
       ${shown.length?`<div class="ccards">${shown.map(r=>this.creatorCard(r)).join('')}</div>`:this.emptyBox('No creators match','Adjust filters or add creators.','')}
       ${total>size?`<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 2px"><span class="cellsub">Showing ${page*size+1}\u2013${Math.min(total,page*size+size)} of ${nfmt(total)}</span><div style="display:flex;gap:6px">${page>0?`<button class="btn ghost xs" onclick="App._rpage=${page-1};App.vRoster()">\u2190 Prev</button>`:''}${(page+1)*size<total?`<button class="btn ghost xs" onclick="App._rpage=${page+1};App.vRoster()">Next \u2192</button>`:''}</div></div>`:''}`;
   },
