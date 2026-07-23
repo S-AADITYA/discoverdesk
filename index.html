@@ -369,8 +369,8 @@ body.dark .topbar{background:rgba(24,24,36,.8)}
 body.dark .b-draft{background:#2a2a3c;color:#9494a8}
 .lchart{width:100%;height:auto}
 .lchart .area{opacity:.14}.lchart .ln{fill:none;stroke-width:2.5}.lchart .pt{stroke:var(--surface);stroke-width:2}.lchart .gl{stroke:var(--line-2);stroke-width:1}.lchart .axl{fill:var(--muted);font-size:9px;font-family:var(--mono)}
-.metric-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:1px;background:var(--line-2);border:1px solid var(--line-2);border-radius:var(--radius-sm);overflow:hidden}
-.metric-row .m{background:var(--surface);padding:12px 14px}.metric-row .m .v{font-family:var(--disp);font-size:20px;font-weight:600}.metric-row .m .l{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-top:2px}
+.metric-row{display:flex;flex-wrap:wrap;gap:1px;background:var(--line-2);border:1px solid var(--line-2);border-radius:var(--radius-sm);overflow:hidden;width:fit-content;max-width:100%}
+.metric-row .m{background:var(--surface);padding:12px 16px;flex:0 0 auto;min-width:118px}.metric-row .m .v{font-family:var(--disp);font-size:20px;font-weight:600}.metric-row .m .l{font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;font-weight:600;margin-top:2px}
 .lead-row{display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--line-2)}.lead-row:last-child{border:none}
 .lead-row .rank{width:22px;height:22px;border-radius:6px;background:var(--surface-2);display:grid;place-items:center;font-size:11px;font-weight:700;color:var(--muted);flex:none}.lead-row .rank.g1{background:#fff3d6;color:#a86a04}
 .sla{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700}
@@ -1555,7 +1555,7 @@ const App={
       audit:{ic:IC.report,t:'Audit Log',admin:1},
       deleted:{ic:IC.trash||IC.x,t:'Deleted',admin:1},
       dsearch:{ic:IC.disc,t:'Discovery Search'},
-      calendar:{ic:IC.dash,t:'Content Calendar'},
+      calendar:{ic:IC.dash,t:'My Calendar'},
       dashboard:{ic:IC.dash,t:'Overview'},
       enquiries:{ic:IC.enq,t:'Brands',cnt:openEnq},
       requests:{ic:IC.req,t:'Requests',cnt:openReq},
@@ -1634,7 +1634,7 @@ const App={
     this.view=v;
     document.querySelectorAll('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));
     document.getElementById('side').classList.remove('open');
-    const T={mission:['Mission Control','Your live discovery operation'],pool:['Campaign Pool','Build a creator pool per campaign'],audit:['Audit Log','Who did what, to the second'],deleted:['Deleted','Recoverable for 30 days'],dsearch:['Discovery Search','Natural-language creator search'],calendar:['Content Calendar','Deadlines & campaign dates'],shortlist:['Shortlist Builder','Drag creators into match-scored groups'],compare:['Creator Comparison','Creators side by side'],dashboard:['Overview','Your department at a glance'],exec:['Dashboards','Executive views by role'],accessmap:['Who sees what','Module visibility by role & permission'],modulemap:['Module map','How every module connects — click any tile to see what it does'],board:['Board','Drag requests through the pipeline'],enquiries:['Enquiries','New business logged by Sales & KAM'],requests:['Requests','Discovery requests across brands'],discovery:['My Discovery','Requests assigned to you'],review:['Review Queue','Submissions waiting on you'],influencers:['Brand Sheets','A live influencer roster per brand'],creators:['Influencer 360','Every creator across all brands, rounds & pricing'],roster:['Roster','Your master influencer database · bulk upload & brand cost'],bridge:['Roster Bridge','Internal cost vs brand cost · live P&L'],clientview:['Client View','Client-safe view of selected creators'],campaigns:['Campaigns','One live sheet per campaign'],team:['Team','Your departments and who does what'],reports:['Reports','Performance, workload & exports'],inbox:['Inbox','Notifications & email drafts'],activity:['Activity','Everything that happened'],users:['People & Access','Accounts, roles & permissions'],integrations:['Integrations','Connect Meta / Instagram & live data']};
+    const T={mission:['Mission Control','Your live discovery operation'],pool:['Campaign Pool','Build a creator pool per campaign'],audit:['Audit Log','Who did what, to the second'],deleted:['Deleted','Recoverable for 30 days'],dsearch:['Discovery Search','Natural-language creator search'],calendar:['My Calendar','Deadlines & campaign dates'],shortlist:['Shortlist Builder','Drag creators into match-scored groups'],compare:['Creator Comparison','Creators side by side'],dashboard:['Overview','Your department at a glance'],exec:['Dashboards','Executive views by role'],accessmap:['Who sees what','Module visibility by role & permission'],modulemap:['Module map','How every module connects — click any tile to see what it does'],board:['Board','Drag requests through the pipeline'],enquiries:['Enquiries','New business logged by Sales & KAM'],requests:['Requests','Discovery requests across brands'],discovery:['My Discovery','Requests assigned to you'],review:['Review Queue','Submissions waiting on you'],influencers:['Brand Sheets','A live influencer roster per brand'],creators:['Influencer 360','Every creator across all brands, rounds & pricing'],roster:['Roster','Your master influencer database · bulk upload & brand cost'],bridge:['Roster Bridge','Internal cost vs brand cost · live P&L'],clientview:['Client View','Client-safe view of selected creators'],campaigns:['Campaigns','One live sheet per campaign'],team:['Team','Your departments and who does what'],reports:['Reports','Performance, workload & exports'],inbox:['Inbox','Notifications & email drafts'],activity:['Activity','Everything that happened'],users:['People & Access','Accounts, roles & permissions'],integrations:['Integrations','Connect Meta / Instagram & live data']};
     document.getElementById('pageTitle').textContent=T[v][0];document.getElementById('pageCrumb').textContent=T[v][1];
     ({mission:this.vMission,audit:this.vAudit,deleted:this.vDeleted,pool:this.vPool,dsearch:this.vDiscoverySearch,calendar:this.vCalendar,shortlist:this.vShortlist,compare:this.vCompare,dashboard:this.vDashboard,exec:this.vExec,accessmap:this.vAccessMap,modulemap:this.vModuleMap,board:this.vBoard,enquiries:this.vEnquiries,requests:this.vRequests,discovery:this.vDiscovery,review:this.vReview,influencers:this.vInfluencers,creators:this.vCreators,roster:this.vRoster,bridge:this.vBridge,clientview:this.vClientView,campaigns:this.vCampaigns,team:this.vTeam,reports:this.vReports,inbox:this.vInbox,activity:this.vActivity,users:this.vUsers,integrations:this.vIntegrations})[v].call(this);
   },
@@ -2597,7 +2597,7 @@ const App={
     const today=new Date(),isToday=d=>d===today.getDate()&&mo===today.getMonth()&&y===today.getFullYear();
     const dow=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     this.set(`
-      <div class="pagehead"><div class="lead"><h2>Content Calendar</h2><p>Request deadlines & campaign dates · conflict detection</p></div>
+      <div class="pagehead"><div class="lead"><h2>My Calendar</h2><p>Request deadlines & campaign dates · conflict detection</p></div>
         <div class="acts"><button class="btn ghost sm" onclick="App.calMove(-1)">‹ Prev</button><button class="btn ghost sm" onclick="App.calToday()">Today</button><button class="btn ghost sm" onclick="App.calMove(1)">Next ›</button></div></div>
       <div class="card pad" style="margin-bottom:12px;display:flex;gap:16px;flex-wrap:wrap;align-items:center">
         <div style="font-family:var(--disp);font-size:18px;font-weight:600">${monthName}</div>
@@ -3296,7 +3296,7 @@ const App={
     const nd=Object.entries(niches).sort((a,b)=>b[1]-a[1]).slice(0,8);const nmax=Math.max(1,...nd.map(x=>x[1]));
     const seg=[['With price',priced.length,'#0ea472'],['Barter',barter.length,'#e0900a'],['No price',none.length,'#8a8a9a']];const tot=R.length||1;let acc=0;const donut=seg.map(([l,v,c])=>{const s=acc/tot*360;acc+=v;return `${c} ${s}deg ${acc/tot*360}deg`;}).join(',');
     const kpi=(l,v,sub)=>`<div class="card pad"><div class="l" style="font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)">${l}</div><div style="font-family:var(--disp);font-size:30px;font-weight:600;margin-top:6px">${v}</div><div class="cellsub" style="margin-top:4px">${sub}</div></div>`;
-    return `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px;margin-bottom:16px">
+    return `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,260px));gap:16px;margin-bottom:16px">
       ${kpi('Total creators','<span class="cup" data-to="'+R.length+'">0</span>',priced.length+' priced · '+barter.length+' barter')}
       ${kpi('Avg reel cost','\u20b9'+(avgReel>=1000?Math.round(avgReel/1000)+'K':avgReel),'across priced creators')}
       ${kpi('Combined reach',nfmt(reach),'total followers')}
@@ -3852,7 +3852,7 @@ const App={
       ['Brand sheets','#12b886',[['influencers','Brand Sheets','Per-brand working lists of creators for each campaign.']]],
       ['Economics','#e0900a',[['bridge','Roster Bridge','Internal cost vs brand cost, margin and live P&L (restricted).']]],
       ['Client-facing','#f08c00',[['clientview','Client View','Client-safe view of confirmed creators, hiding internal cost.']]],
-      ['Delivery','#e64980',[['calendar','Content Calendar','Request deadlines & campaign dates with conflict detection.'],['campaigns','Campaigns','One live sheet per campaign, aggregating every confirmed creator.']]],
+      ['Delivery','#e64980',[['calendar','My Calendar','Request deadlines & campaign dates with conflict detection.'],['campaigns','Campaigns','One live sheet per campaign, aggregating every confirmed creator.']]],
       ['Mission Control','#e64980',[['mission','Mission Control','Live discovery operation: SLA countdowns, feed, workload, health.']]],
       ['Overview','#7048e8',[['dashboard','Overview','Your department KPIs and live pipeline at a glance.']]],
       ['Analytics','#845ef7',[['exec','Dashboards','CEO / Chief-of-Staff / Manager / Employee executive views.'],['reports','Reports','Trends, leaderboards, brand and person breakdowns.']]],
