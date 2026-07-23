@@ -1206,6 +1206,24 @@ const App={
       this._rosterIds=currentIds;
     }catch(e){ console.error('saveRosterCloud',e); }
   },
+  /* Delta roster writes — persist ONE (or a few) rows via roster_sync instead of
+     re-uploading the whole roster. Essential at 18k+ rows. Falls back to a full
+     local save when offline. Callers must have already mutated this.db.roster. */
+  async saveRosterRow(r){
+    if(!r)return;
+    if(!CLOUD){ await store.set(K.roster,this.db.roster); return; }
+    const d={...r};delete d._cmask;delete d.email;delete d.phone;delete d.id;
+    const row={id:r.id,data:d,contact:r._cmask?{}:{email:r.email||'',phone:r.phone||''}};
+    const {error}=await SB.rpc('roster_sync',{p_rows:[row],p_removed:[]});
+    if(error){console.error('saveRosterRow',error);return this.toast('Save failed: '+(error.message||error),'err');}
+    if(this._rosterIds)this._rosterIds.add(r.id);
+  },
+  async delRosterRow(id){
+    if(!CLOUD){ await store.set(K.roster,this.db.roster); return; }
+    const {error}=await SB.rpc('roster_sync',{p_rows:[],p_removed:[id]});
+    if(error){console.error('delRosterRow',error);return this.toast('Delete failed: '+(error.message||error),'err');}
+    if(this._rosterIds)this._rosterIds.delete(id);
+  },
   async nextSeq(pfx){let s=await store.get(K.seq)||{};s[pfx]=(s[pfx]||0)+1;await store.set(K.seq,s);return pfx+'-'+String(s[pfx]).padStart(4,'0');},
 
   async seed(){
@@ -1474,7 +1492,7 @@ const App={
   // Creator data verification — who checked it and when; flag if never/stale (>90d).
   staleFlag(r){if(!r||!r.verifiedAt)return '';const days=(now()-r.verifiedAt)/864e5;return days>90?'<span class="badge b-rejected" style="font-size:9px">⚑ stale</span>':'';},
   verifyState(r){if(!r||!r.verifiedAt)return 'unverified';return ((now()-r.verifiedAt)/864e5>90)?'stale':'verified';},
-  async verifyCreator(id){const r=this.db.roster.find(x=>x.id===id);if(!r)return;r.verified=true;r.verifiedAt=now();r.verifiedBy=this.me.id;this.audit('creator.verify','creator:'+r.handle,{handle:r.handle,name:r.name});await this.save('roster');this.toast('Marked as verified','ok');this.closeAll();this.vRoster();},
+  async verifyCreator(id){const r=this.db.roster.find(x=>x.id===id);if(!r)return;r.verified=true;r.verifiedAt=now();r.verifiedBy=this.me.id;this.audit('creator.verify','creator:'+r.handle,{handle:r.handle,name:r.name});await this.saveRosterRow(r);this.toast('Marked as verified','ok');this.closeAll();this.vRoster();},
   // When Discovery adds a creator it lands in the roster AND is appended to a
   // separate submissions log (who added what, when) in stored data.
   async logRosterSubmission(rec){if(!SB||!rec)return;try{await SB.from('roster_submissions').insert({
@@ -3696,7 +3714,7 @@ const App={
     if(id){const ex=this.db.roster.find(x=>x.id===id);const changed=Object.keys(rec).filter(k=>ex[k]!==rec[k]&&typeof rec[k]!=='object').slice(0,4);Object.assign(ex,rec);this.audit('creator.edit','creator:'+h,{handle:h,name:rec.name,field:changed.join(', ')});}else{this.db.roster.push({id:uid(),...rec,addedAt:now(),addedBy:this.me.id});this.audit('creator.add','creator:'+h,{handle:h,name:rec.name,source:'manual'});}
     await this.save('roster');this.closeAll();this.toast('Saved','ok');this.vRoster();
   },
-  async delRoster(id){if(!this.isPermAdmin())return this.toast('Only the permanent admin can delete','err');const _dr=this.db.roster.find(x=>x.id===id);if(_dr)this.audit('creator.delete','creator:'+_dr.handle,{handle:_dr.handle,name:_dr.name});this.db.roster=this.db.roster.filter(x=>x.id!==id);await this.save('roster');this.closeAll();this.toast('Deleted','ok');this.vRoster();},
+  async delRoster(id){if(!this.isPermAdmin())return this.toast('Only the permanent admin can delete','err');const _dr=this.db.roster.find(x=>x.id===id);if(_dr)this.audit('creator.delete','creator:'+_dr.handle,{handle:_dr.handle,name:_dr.name});this.db.roster=this.db.roster.filter(x=>x.id!==id);await this.delRosterRow(id);this.closeAll();this.toast('Deleted','ok');this.vRoster();},
   exportRoster(){if(!this.canExport())return this.toast('Only Admin can export, from the Roster module','err');this.export((this.db.roster||[]).map(r=>({Handle:'@'+r.handle,Platform:r.platform,Followers:r.followers,Engagement:r.eng,Category:r.category,City:r.city,BrandCost:r.brandCost,InternalCost:r.internalCost})),'roster.xlsx');},
   rosterTemplate(){this.export([{handle:'creatorname',name:'Full Name',platform:'Instagram',followers:120000,engagement:'4.2%',category:'Fashion',city:'Mumbai',country:'India',language:'Hindi, English',price_type:'priced',reel_cost:60000,video_story:20000,store_visit:30000,brand_cost:90000,internal_cost:54000,email:'name@email.com',phone:'+91...'}],'roster_upload_template.xlsx');this.toast('Template downloaded — fill it and use Import','ok');},
   helpTour(){
@@ -3753,7 +3771,7 @@ const App={
       </div><div class="mfoot"><button class="btn primary" onclick="App.closeAll()">Done</button></div>`);
   },
   async keepOne(id,gi){const {groups}=this.rosterDupes();const g=groups[gi];if(!g)return;const remove=g.records.filter(r=>r.id!==id).map(r=>r.id);this.db.roster=this.db.roster.filter(r=>!remove.includes(r.id));await this.save('roster');this.toast('Merged — removed '+remove.length,'ok');this.duplicatesModal();},
-  async delRosterDup(id){if(!this.isPermAdmin())return this.toast('Only the permanent admin can delete','err');this.db.roster=this.db.roster.filter(r=>r.id!==id);await this.save('roster');this.toast('Deleted','ok');this.duplicatesModal();},
+  async delRosterDup(id){if(!this.isPermAdmin())return this.toast('Only the permanent admin can delete','err');this.db.roster=this.db.roster.filter(r=>r.id!==id);await this.delRosterRow(id);this.toast('Deleted','ok');this.duplicatesModal();},
 
   /* ================= ROSTER BRIDGE (P&L) ================= */
   vBridge(){
@@ -5425,9 +5443,10 @@ Object.assign(App,{
       cats,category:g('ro_c')||cats[0]||'',brandTypes:g('ro_btype').split(',').map(s=>s.trim()).filter(Boolean),
       city:g('ro_city'),email:g('ro_email'),brandCost:+g('ro_bc')||0,
       internalCost:this.can('bridge')?(+g('ro_ic')||0):(id?(this.db.roster.find(x=>x.id===id)||{}).internalCost||0:0)};
-    if(id){const ex=this.db.roster.find(x=>x.id===id);Object.assign(ex,rec);this.audit('creator.edit','creator:'+h,{handle:h,name:rec.name,field:'categories: '+cats.join(' · ')});}
-    else{this.db.roster.push({id:uid(),...rec,addedAt:now(),addedBy:this.me.id});this.audit('creator.add','creator:'+h,{handle:h,name:rec.name,source:'manual'});this.logRosterSubmission(rec);}
-    await this.save('roster');this.closeAll();this.toast('Saved','ok');this.vRoster();
+    let saved;
+    if(id){const ex=this.db.roster.find(x=>x.id===id);Object.assign(ex,rec);saved=ex;this.audit('creator.edit','creator:'+h,{handle:h,name:rec.name,field:'categories: '+cats.join(' · ')});}
+    else{saved={id:uid(),...rec,addedAt:now(),addedBy:this.me.id};this.db.roster.push(saved);this.audit('creator.add','creator:'+h,{handle:h,name:rec.name,source:'manual'});this.logRosterSubmission(rec);}
+    await this.saveRosterRow(saved);this.closeAll();this.toast('Saved','ok');this.vRoster();
   },
   exportRoster(){if(!this.canExport())return this.toast('Only Admin can export, from the Roster module','err');this.export((this.db.roster||[]).map(r=>{const c=this.topCats(r);return {Handle:'@'+r.handle,Name:r.name,Platform:r.platform,Followers:r.followers,Engagement:r.eng,Category1:c[0]||'',Category2:c[1]||'',Category3:c[2]||'',Category4:c[3]||'',Category5:c[4]||'',BrandTypes:(r.brandTypes||[]).join('; '),City:r.city,BrandCost:r.brandCost,InternalCost:r.internalCost};}),'roster.xlsx');},
   rosterTemplate(){this.export([{handle:'creatorname',name:'Full Name',platform:'Instagram',followers:120000,engagement:'4.2%',category_1:'Fashion',category_2:'Lifestyle',category_3:'Travel',category_4:'Beauty',category_5:'Food',brand_types:'D2C skincare; QSR',city:'Mumbai',country:'India',language:'Hindi, English',price_type:'priced',reel_cost:60000,video_story:20000,store_visit:30000,brand_cost:90000,internal_cost:54000,email:'name@email.com',phone:'+91...'}],'roster_upload_template.xlsx');this.toast('Template downloaded — categories 1–5 are ranked, strongest first','ok');},
