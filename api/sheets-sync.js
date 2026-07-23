@@ -47,6 +47,11 @@ const RESERVED = new Set(['reel', 'reels', 'p', 'tv', 'stories', 'story', 'explo
 
 function handleFrom(link, name) {
   const u = str(link).split(/\s/)[0].split('?')[0].replace(/\/+$/, '');
+  // Bare "@handle" or plain username (many rows use these instead of a full URL).
+  if (u && !u.includes('/') && !/^https?:/i.test(u) && !/\.(com|be|in|io|net|org)/i.test(u)) {
+    const seg = u.replace(/^@/, '');
+    if (/[a-z]/i.test(seg) && /^[a-z0-9._]{2,30}$/i.test(seg) && !RESERVED.has(seg.toLowerCase())) return seg.toLowerCase();
+  }
   const afterHost = u.replace(/^https?:\/\//i, '').replace(/^(www|m|mobile)\./i, '');
   const parts = afterHost.split('/').filter(Boolean);
   if (parts.length >= 2) {
@@ -76,14 +81,16 @@ const looksHeader = r => {
   // Needs a header-label name column AND a header-label followers/profile column.
   // Deliberately strict: bare "creator" and value-substrings like "instagram"/"url"
   // are NOT used, because data rows carry a "Creator" category or an instagram URL.
-  return low.some(c => c === 'name' || c.includes('full name') || c.includes('full_name') || c.includes('creator name') || c.includes('influencer name'))
+  return low.some(c => c === 'name' || c.includes('full name') || c.includes('full_name') || c.includes('creator name') || c.includes('influencer name') || c.includes('first name') || c.includes('last name'))
       && low.some(c => c.includes('profile') || c.includes('follower') || c.includes('subs') || c.includes('channel'));
 };
 function mapHeader(hdr) {
   const low = hdr.map(c => str(c).toLowerCase());
   const find = (...names) => low.findIndex(c => names.some(n => c.includes(n)));
   return {
-    name: find('name', 'creator'), link: find('profile', 'link', 'url', 'channel'),
+    name: find('full name', 'display name', 'creator name', 'influencer name', 'name'),
+    firstName: find('first name'), lastName: find('last name'),
+    link: find('profile', 'link', 'url', 'channel'),
     followers: find('follower', 'subs'), category: find('categ', 'niche', 'genre'),
     language: find('language', 'lang'), location: find('location', 'city'),
     platform: find('platform'), gender: find('gender'), tier: find('tier'),
@@ -105,7 +112,10 @@ function recordsFromTab(rows) {
     if (looksHeader(r)) { seg = { map: mapHeader(r) }; continue; }
     if (!seg) continue; // rows before the first header have no schema
     const m = seg.map;
-    const name = str(at(r, m.name)), link = str(at(r, m.link));
+    // Some tabs (e.g. "MHS DATA") split the name into First Name + Last Name.
+    const first = str(at(r, m.firstName)), last = str(at(r, m.lastName));
+    const name = (m.firstName >= 0 || m.lastName >= 0) ? [first, last].filter(Boolean).join(' ') : str(at(r, m.name));
+    const link = str(at(r, m.link));
     if (!name && !link) continue;
     const handle = handleFrom(link, name);
     if (!handle) continue;
@@ -122,10 +132,10 @@ function recordsFromTab(rows) {
     const tier = str(at(r, m.tier)); if (tier) d.tier = tier;
     const addedBy = str(at(r, m.addedBy)); if (addedBy) d.addedByName = addedBy;
     const followers = parseCount(at(r, m.followers)); if (followers) d.followers = followers;
-    const reel = money(at(r, m.reel)) || money(at(r, m.cost)); if (reel) { d.reelCost = reel; d.pricing.reel = reel; }
-    const vs = money(at(r, m.videoStory)); if (vs) { d.videoStory = vs; d.pricing.story = vs; }
-    const sv = money(at(r, m.storeCost)); if (sv) { d.storeVisit = sv; d.pricing.storeVisit = sv; }
-    const sr = money(at(r, m.storyReshare)); if (sr) d.pricing.storyReshare = sr;
+    const reel = parseCount(at(r, m.reel)) || parseCount(at(r, m.cost)); if (reel) { d.reelCost = reel; d.pricing.reel = reel; }
+    const vs = parseCount(at(r, m.videoStory)); if (vs) { d.videoStory = vs; d.pricing.story = vs; }
+    const sv = parseCount(at(r, m.storeCost)); if (sv) { d.storeVisit = sv; d.pricing.storeVisit = sv; }
+    const sr = parseCount(at(r, m.storyReshare)); if (sr) d.pricing.storyReshare = sr;
     d.storeVisitAvailable = /^y|yes|available/.test(str(at(r, m.storeOk)).toLowerCase());
     const contact = {};
     const phone = str(at(r, m.phone)).replace(/\s+/g, ' '); if (phone) contact.phone = phone;
@@ -188,12 +198,15 @@ module.exports = async (req, res) => {
         catch { continue; }
         for (const { d, contact } of recordsFromTab(rows)) {
           const prev = byHandle.get(d.handle);
-          if (!prev) { byHandle.set(d.handle, { d: { ...d }, contact: { ...contact } }); continue; }
-          const pricingWas = prev.d.pricing, handlesWas = prev.d.handles, svaWas = prev.d.storeVisitAvailable;
+          // Same Instagram handle already seen in another sub-sheet → don't add a
+          // second row; keep ONE merged record and mark it as a duplicate.
+          if (!prev) { byHandle.set(d.handle, { d: { ...d, dupeCount: 1, duplicate: false }, contact: { ...contact } }); continue; }
+          const pricingWas = prev.d.pricing, handlesWas = prev.d.handles, svaWas = prev.d.storeVisitAvailable, cnt = (prev.d.dupeCount || 1) + 1;
           prev.d = { ...prev.d, ...Object.fromEntries(Object.entries(d).filter(([, v]) => v !== '' && v != null && !(Array.isArray(v) && !v.length))) };
           prev.d.pricing = { ...pricingWas, ...d.pricing };
           prev.d.handles = { ...handlesWas, ...d.handles };
           prev.d.storeVisitAvailable = svaWas || d.storeVisitAvailable;
+          prev.d.dupeCount = cnt; prev.d.duplicate = true;
           prev.contact = { ...prev.contact, ...contact };
         }
       }
