@@ -961,8 +961,13 @@ const App={
   async fetchAll(rel,order,asc){
     const PAGE=1000,out=[];
     for(let i=0;;i+=PAGE){
-      const {data,error}=await SB.from(rel).select('*')
-        .order(order||'created_at',{ascending:asc!==false}).range(i,i+PAGE-1);
+      // Retry each page — a single transient error must not throw away the whole
+      // (18k-row) load and fall back to stale local data.
+      let data,error,tries=0;
+      do{
+        ({data,error}=await SB.from(rel).select('*').order(order||'created_at',{ascending:asc!==false}).range(i,i+PAGE-1));
+        if(error){tries++;if(tries<4)await new Promise(r=>setTimeout(r,300*tries));}
+      }while(error&&tries<4);
       if(error)throw error;
       out.push(...(data||[]));
       if(!data||data.length<PAGE)return out;
@@ -1037,19 +1042,7 @@ const App={
       // this before any roster-dependent view/feature reads this.db.roster.
       this.db.roster = this.db.roster || [];
       this._rosterLoaded = false;
-      this._rosterP = (async () => {
-        try{
-          const rows=await this.fetchAll('roster_v');
-          this.db.roster = rows.map(row=>({ ...row.data, ...(row.contact||{}), id:row.id, _cmask:!row.contact_visible }));
-          this._kvFb.roster=false;
-        }catch(e){
-          console.warn('roster_v unavailable — using kv fallback:',e&&e.message);
-          this.db.roster = await store.get(K.roster)||[];
-          this._kvFb.roster=true;
-        }
-        this._rosterIds = new Set(this.db.roster.map(r=>r.id));
-        this._rosterLoaded = true;
-      })();
+      this._rosterP = this._loadRoster();
 
       // Load everything else from KV
       for(const k in K){
@@ -1702,7 +1695,29 @@ const App={
     if(ROSTER_VIEWS.has(v)&&!this._rosterLoaded){this.set('<div style="padding:48px;text-align:center;color:var(--muted)">Loading roster…</div>');this.ensureRoster().then(dispatch);}
     else dispatch();
   },
-  async ensureRoster(){if(this._rosterP)await this._rosterP;return this.db.roster;},
+  _loadRoster(){
+    return (async()=>{
+      try{
+        const rows=await this.fetchAll('roster_v');
+        this.db.roster = rows.map(row=>({ ...row.data, ...(row.contact||{}), id:row.id, _cmask:!row.contact_visible }));
+        this._kvFb.roster=false; this._rosterErr=false;
+      }catch(e){
+        console.error('roster load failed:',e&&e.message);
+        this._rosterErr=true; this._kvFb.roster=true;
+        // Cloud mode: DON'T substitute stale demo rows (that made search return junk).
+        // Keep whatever we have; ensureRoster() retries on the next roster view.
+        if(!CLOUD) this.db.roster = await store.get(K.roster)||[];
+      }
+      this._rosterIds = new Set(this.db.roster.map(r=>r.id));
+      this._rosterLoaded = true;
+    })();
+  },
+  async ensureRoster(){
+    if(CLOUD && this._rosterErr){ this._rosterErr=false; this._rosterLoaded=false; this._rosterP=this._loadRoster(); }
+    if(this._rosterP)await this._rosterP;
+    if(CLOUD && this._rosterErr) this.toast&&this.toast('Roster failed to load — check connection and reopen Roster','err');
+    return this.db.roster;
+  },
   set(h){const c=document.getElementById('content');c.innerHTML=h;c.classList.remove('view-in');void c.offsetWidth;c.classList.add('view-in');this.animateCounts();this.animateProgress&&this.animateProgress();this.startDeadlineTicks&&this.startDeadlineTicks();},
   user(id){return this.db.users.find(u=>u.id===id);},
   brand(id){return this.db.brands.find(b=>b.id===id);},
