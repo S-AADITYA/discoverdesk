@@ -2,5 +2,15 @@
   "crons": [
     { "path": "/api/provider-refresh", "schedule": "0 3 * * *" },
     { "path": "/api/sheets-sync", "schedule": "0 4 * * *" }
+  ],
+  "headers": [
+    {
+      "source": "/",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, must-revalidate" }]
+    },
+    {
+      "source": "/index.html",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache, must-revalidate" }]
+    }
   ]
 }

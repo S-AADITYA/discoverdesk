@@ -2657,11 +2657,17 @@ const App={
   renderSearchResults(q,parsed,results,usedAi){
     const chips=Object.entries(parsed).map(([k,v])=>`<span class="tag">${k}: ${esc(''+v)}</span>`).join('')||'<span class="cellsub">no structured filters detected — showing top matches</span>';
     const box=document.getElementById('aiSearchResult');if(!box)return;
+    this._searchSel=this._searchSel||new Set();
+    const canPick=this.can('raise')||this.can('discover')||this.can('review')||this.can('admin');
     box.innerHTML=`<div style="margin:10px 0"><span class="cellsub">${usedAi?'AI-parsed':'Interpreted (local)'} · ${results.length} match${results.length!==1?'es':''}:</span> ${chips}</div>
-      <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Creator</th><th>Followers</th><th>Category</th><th>City</th><th>Match</th><th>Health</th><th>Cost</th></tr></thead><tbody>
-      ${results.map(({r,m,h})=>`<tr class="click" onclick="App.rosterDashboard('${r.id}')"><td class="strong">${esc(r.name||('@'+r.handle))}</td><td class="mono">${nfmt(r.followers)}</td><td>${esc(r.category||'—')}</td><td>${esc(r.city||'—')}</td><td><span class="hpill" style="--h:${m.overall}">${m.overall}</span></td><td><span class="hpill" style="--h:${h.overall}">${h.overall}</span></td><td class="mono">${(r.brandCost||r.reelCost)?'₹'+nfmt(r.brandCost||r.reelCost):'—'}</td></tr>`).join('')||'<tr><td colspan="7" class="cellsub" style="padding:16px">No creators match. Try broader terms or import more roster data.</td></tr>'}
+      ${canPick?`<div class="actbar" style="margin-bottom:8px"><button class="btn primary sm" onclick="App.raiseWithSelected()">${svg(IC.plus,13)} Raise request with selected</button><button class="btn ghost sm" onclick="App.clearSearchSel()">Clear</button><span class="cellsub" id="selCount">${this._searchSel.size} selected</span></div>`:''}
+      <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr>${canPick?'<th style="width:34px"></th>':''}<th>Creator</th><th>Followers</th><th>Category</th><th>City</th><th>Match</th><th>Health</th><th>Cost</th></tr></thead><tbody>
+      ${results.map(({r,m,h})=>`<tr class="click" onclick="App.rosterDashboard('${r.id}')">${canPick?`<td onclick="event.stopPropagation()"><input type="checkbox" ${this._searchSel.has(r.id)?'checked':''} onclick="App.toggleSearchSel('${r.id}',this.checked)"></td>`:''}<td class="strong">${esc(r.name||('@'+r.handle))}</td><td class="mono">${nfmt(r.followers)}</td><td>${esc(r.category||'—')}</td><td>${esc(r.city||'—')}</td><td><span class="hpill" style="--h:${m.overall}">${m.overall}</span></td><td><span class="hpill" style="--h:${h.overall}">${h.overall}</span></td><td class="mono">${(r.brandCost||r.reelCost)?'₹'+nfmt(r.brandCost||r.reelCost):'—'}</td></tr>`).join('')||`<tr><td colspan="${canPick?8:7}" class="cellsub" style="padding:16px">No creators match. Try broader terms.</td></tr>`}
       </tbody></table></div>`;
   },
+  toggleSearchSel(id,on){this._searchSel=this._searchSel||new Set();if(on)this._searchSel.add(id);else this._searchSel.delete(id);const el=document.getElementById('selCount');if(el)el.textContent=this._searchSel.size+' selected';},
+  clearSearchSel(){this._searchSel=new Set();this.runAiSearch();},
+  raiseWithSelected(){this._searchSel=this._searchSel||new Set();if(!this._searchSel.size)return this.toast('Tick some creators first','err');if(!this.can('raise')&&!this.can('admin'))return this.toast('Only Sales/KAM/Admin can raise requests','err');this._reqPicks=[...this._searchSel];this.toast(this._searchSel.size+' creators added to the request','ok');this.openNewReq({});},
   async vDiscoverySearch(){
     if(!this.can('roster')&&!this.can('discover')&&!this.can('review')&&!this.can('admin'))return this.set(this.emptyBox('No access','Discovery search is for Discovery, Review, Roster & Admin.'));
     this._searchHist=this._searchHist||await store.get('dd:searchHist')||[];
