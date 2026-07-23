@@ -1691,15 +1691,25 @@ const App={
     document.getElementById('pageTitle').textContent=T[v][0];document.getElementById('pageCrumb').textContent=T[v][1];
     const dispatch=()=>({mission:this.vMission,audit:this.vAudit,deleted:this.vDeleted,pool:this.vPool,dsearch:this.vDiscoverySearch,calendar:this.vCalendar,shortlist:this.vShortlist,compare:this.vCompare,dashboard:this.vDashboard,exec:this.vExec,accessmap:this.vAccessMap,modulemap:this.vModuleMap,board:this.vBoard,enquiries:this.vEnquiries,requests:this.vRequests,discovery:this.vDiscovery,review:this.vReview,influencers:this.vInfluencers,creators:this.vCreators,roster:this.vRoster,bridge:this.vBridge,clientview:this.vClientView,campaigns:this.vCampaigns,team:this.vTeam,reports:this.vReports,inbox:this.vInbox,activity:this.vActivity,users:this.vUsers,integrations:this.vIntegrations})[v].call(this);
     // Stage-2: roster-dependent views wait for the background roster load once.
-    const ROSTER_VIEWS=new Set(['roster','creators','bridge','pool','shortlist','compare','dsearch']);
+    const ROSTER_VIEWS=new Set(['creators','bridge','pool','shortlist','compare','dsearch']);
     if(ROSTER_VIEWS.has(v)&&!this._rosterLoaded){this.set('<div style="padding:48px;text-align:center;color:var(--muted)">Loading roster…</div>');this.ensureRoster().then(dispatch);}
     else dispatch();
   },
   _loadRoster(){
     return (async()=>{
       try{
-        const rows=await this.fetchAll('roster_v');
-        this.db.roster = rows.map(row=>({ ...row.data, ...(row.contact||{}), id:row.id, _cmask:!row.contact_visible }));
+        // CAP the client-side roster to keep the app fast at 18k+ rows. The full
+        // "All creators" browse/search runs SERVER-SIDE (rosterAll queries roster_v
+        // per page), so this cache only feeds dashboards/pool/pickers.
+        const PAGE=1000, MAX=3000, out=[];
+        for(let i=0;i<MAX;i+=PAGE){
+          let data,error,tries=0;
+          do{({data,error}=await SB.from('roster_v').select('*').order('created_at',{ascending:false}).range(i,i+PAGE-1));if(error){tries++;if(tries<3)await new Promise(r=>setTimeout(r,300*tries));}}while(error&&tries<3);
+          if(error)throw error;
+          out.push(...(data||[]));
+          if(!data||data.length<PAGE)break;
+        }
+        this.db.roster = out.map(row=>({ ...row.data, ...(row.contact||{}), id:row.id, _cmask:!row.contact_visible }));
         this._kvFb.roster=false; this._rosterErr=false;
       }catch(e){
         console.error('roster load failed:',e&&e.message);
@@ -3380,7 +3390,7 @@ const App={
   avatarColor(seed){const cols=['#12b886','#4c6ef5','#e8590c','#7048e8','#e64980','#0ca678','#f08c00','#1098ad'];let h=0;for(const ch of (seed||'x'))h=(h*31+ch.charCodeAt(0))>>>0;return cols[h%cols.length];},
   vRoster(){
     if(!this.can('roster'))return this.set(this.emptyBox('No access','The roster is available to Discovery, KAM & Admin.'));
-    const tab=this._rtab||'dashboard';const dupN=this.rosterDupes().groups.length;
+    const tab=this._rtab||'all';const dupN=(this.db.roster&&this.db.roster.length)?this.rosterDupes().groups.length:0;
     const head=`<div class="pagehead"><div class="lead"><h2>Roster</h2><p>Your master influencer database · Sheets sync & 8-hour auto-refresh</p></div>
       <div class="acts">${this.canAddRoster()?`<button class="btn ghost" onclick="App.syncSheets()">${svg(IC.refresh,15)} Sync sheets</button>`:''}<button class="btn ghost" onclick="App.duplicatesModal()">${svg(IC.brand,15)} Duplicates${dupN?` <span class="badge b-rejected" style="font-size:9px">${dupN}</span>`:''}</button><button class="btn ghost" onclick="App.rosterTemplate()">${svg(IC.down,15)} Template</button>${this.canAddRoster()?`<button class="btn ghost" onclick="document.getElementById('rosterFile').click()">${svg(IC.up,15)} Import</button><button class="btn ghost" onclick="App.hashfameImport()">${svg(IC.up,15)} Hashfame</button>`:''}${this.canExport()?`<button class="btn ghost" onclick="App.exportRoster()">${svg(IC.down,15)} Export</button>`:''}${this.canAddRoster()?`<button class="btn primary" onclick="App.addRosterOne()">${svg(IC.plus,16)} Add creator</button>`:''}</div></div>
       <input type="file" id="rosterFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="App.rosterUpload(event)">
@@ -3390,8 +3400,19 @@ const App={
         <span id="sheetsLink" class="badge b-pending"><span class="d"></span>Checking sheet…</span>
         <span style="flex:1"></span>${this.can('integrations')?`<button class="btn ghost sm" onclick="App.go('integrations')">${svg(IC.plug,14)} Connect Sheets & provider</button>`:''}</div>
       <div class="rtab"><button class="${tab==='dashboard'?'on':''}" onclick="App._rtab='dashboard';App.vRoster()">Dashboard</button><button class="${tab==='all'?'on':''}" onclick="App._rtab='all';App.vRoster()">All creators</button><button class="${tab==='mis'?'on':''}" onclick="App._rtab='mis';App.vRoster()">MIS / Reports</button></div>`;
-    let body=tab==='dashboard'?this.rosterDash():tab==='mis'?this.rosterMis():this.rosterAll();
-    this.set(head+body);this.checkSheetsLink();
+    this.set(head+'<div id="rBody"><div style="padding:44px;text-align:center;color:var(--muted)">Loading…</div></div>');
+    this.checkSheetsLink();
+    this._fillRosterBody(tab);
+  },
+  async _fillRosterBody(tab){
+    let html;
+    try{
+      await this.ensureRoster();                                    // capped cache (fast)
+      if(tab==='mis')html=this.rosterMis();
+      else if(tab==='dashboard')html=this.rosterDash();
+      else html=await this.rosterAll();                            // browse=cache, search=server-side
+    }catch(e){ html=`<div class="notice">${svg(IC.bolt,15)}<div>Could not load roster: ${esc(e&&e.message||e)}</div></div>`; }
+    const el=document.getElementById('rBody'); if(el)el.innerHTML=html;
   },
   // Live health check of the Google Sheets link (fast; no sync). Updates the badge.
   async checkSheetsLink(){
@@ -3427,9 +3448,41 @@ const App={
       </div>
     </div>`;
   },
-  rosterAll(){
-    const f=this._rf=this._rf||{};let R=this.rosterList();
-    const q=(this._q||'').trim().toLowerCase();
+  // Full-roster text search, run in Postgres (roster_v) so it covers all 18k+
+  // creators without loading them into the browser. Paginated.
+  async _rosterSearchServer(qraw,f){
+    const size=48,page=this._rpage||0;
+    const L='%'+qraw.replace(/[,%()*]/g,' ').trim()+'%';
+    let query=SB.from('roster_v').select('id,data',{count:'exact'})
+      .or(`data->>handle.ilike.${L},data->>name.ilike.${L},data->>category.ilike.${L},data->>city.ilike.${L}`);
+    if(f.niche)query=query.ilike('data->>category','%'+f.niche+'%');
+    if(f.platform)query=query.ilike('data->>platform',f.platform);
+    if(f.price==='priced')query=query.eq('data->>priceType','priced');
+    if(f.verified==='yes')query=query.eq('data->>verified','true');
+    else if(f.verified==='no')query=query.or('data->>verified.is.null,data->>verified.eq.false');
+    query=query.order('id').range(page*size,page*size+size-1);
+    const {data,count,error}=await query;
+    if(error)return `<div class="notice" style="margin-top:8px">${svg(IC.bolt,15)}<div>Search failed: ${esc(error.message||error)}</div></div>`;
+    let rows=(data||[]).map(row=>({...row.data,id:row.id}));
+    if(f.tier)rows=rows.filter(r=>this.tierOf(r.followers)===f.tier);
+    const total=count||0;
+    const chip=(k,l,c)=>`<span class="chip ${((f.price||'all')===k)?'on':''}" onclick="App.setRF('price','${k==='all'?'':k}')">${c?`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:6px;vertical-align:middle"></span>`:''}${l}</span>`;
+    return `<div class="rfilters">
+      <span class="cellsub" style="font-weight:600">Search: "${esc(qraw)}"</span>
+      <button class="btn ghost sm" onclick="App._q='';App._rpage=0;App.vRoster()">Clear search</button>
+      ${chip('all','All')}${chip('priced','With price','#0ea472')}
+      <select class="inp" style="width:auto" onchange="App.setRF('verified',this.value)"><option value="">Any status</option><option value="yes" ${f.verified==='yes'?'selected':''}>Verified</option><option value="no" ${f.verified==='no'?'selected':''}>Unverified</option></select>
+      <span style="flex:1"></span><span class="cellsub">${nfmt(total)} match${total!==1?'es':''}</span></div>
+      ${rows.length?`<div class="ccards">${rows.map(r=>this.creatorCard(r)).join('')}</div>`:this.emptyBox('No creators match "'+esc(qraw)+'"','Try a shorter or different term.','')}
+      ${total>size?`<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 2px"><span class="cellsub">Showing ${page*size+1}–${Math.min(total,page*size+rows.length)} of ${nfmt(total)}</span><div style="display:flex;gap:6px">${page>0?`<button class="btn ghost xs" onclick="App._rpage=${page-1};App.vRoster()">← Prev</button>`:''}${(page+1)*size<total?`<button class="btn ghost xs" onclick="App._rpage=${page+1};App.vRoster()">Next →</button>`:''}</div></div>`:''}`;
+  },
+  async rosterAll(){
+    const f=this._rf=this._rf||{};
+    const qraw=(this._q||'').trim();
+    // At 18k+ a text search runs SERVER-SIDE over the FULL roster (not the cache).
+    if(qraw && CLOUD) return await this._rosterSearchServer(qraw,f);
+    let R=this.rosterList();
+    const q=qraw.toLowerCase();
     if(q)R=R.filter(r=>((r.handle||'')+(r.name||'')+(r.category||'')+(r.city||'')+(r.country||'')+(r.email||'')+(r.phone||'')+(r.niches||[]).join(' ')+(r.tags||[]).join(' ')+(r.hashtags||[]).join(' ')+(r.brandsTagged||[]).join(' ')).toLowerCase().includes(q));
     if(f.price)R=R.filter(r=>this.priceOf(r)===f.price);
     if(f.niche)R=R.filter(r=>r.category===f.niche);
