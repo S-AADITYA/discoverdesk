@@ -1224,6 +1224,39 @@ const App={
     if(error){console.error('delRosterRow',error);return this.toast('Delete failed: '+(error.message||error),'err');}
     if(this._rosterIds)this._rosterIds.delete(id);
   },
+  // When discovery uploads a round sheet, any creator not already in the roster
+  // is auto-registered (source:'request', unverified) via ONE delta save.
+  async registerRoundToRoster(rows){
+    if(!rows||!rows.length)return 0;
+    const norm=h=>(''+(h||'')).trim().toLowerCase().replace(/^@/,'');
+    const pick=(row,names)=>{const k=Object.keys(row).find(k=>names.some(n=>k.toLowerCase().includes(n)));return k?(''+row[k]).trim():'';};
+    const fromLink=link=>{let u=link.split(/\s/)[0].split('?')[0].replace(/\/+$/,'');const bare=u.replace(/^@/,'');if(u&&!u.includes('/')&&!/\.(com|be|in|io)/i.test(u)&&/[a-z]/i.test(bare))return norm(bare);u=u.replace(/^https?:\/\//i,'').replace(/^(www|m)\./i,'');const p=u.split('/').filter(Boolean);if(p.length>=2&&/instagram|youtube|tiktok/.test(p[0])){const s=p[1].replace(/^@/,'');if(!['reel','reels','p','tv'].includes(s.toLowerCase()))return norm(s);}return '';};
+    const have=new Set(this.db.roster.map(r=>norm(r.handle)));
+    const fresh=[];
+    for(const row of rows){
+      let handle=norm(pick(row,['handle','username']));
+      const link=pick(row,['profile','link','url','instagram']);
+      const name=pick(row,['name']);
+      if(!handle&&link)handle=fromLink(link);
+      if(!handle&&name)handle=name.toLowerCase().replace(/[^a-z0-9]+/g,'.').replace(/^\.|\.$/g,'');
+      if(!handle||have.has(handle))continue;
+      have.add(handle);
+      const followers=parseInt(pick(row,['follower','subs']).replace(/[^\d]/g,''))||0;
+      const reel=parseInt(pick(row,['reel','cost','price']).replace(/[^\d]/g,''))||0;
+      const rec={id:'req:instagram:'+handle,handle,handles:{instagram:handle},name:name||handle,platform:'Instagram',
+        profileUrl:link||'',category:pick(row,['categor','niche']),city:pick(row,['city','location']),
+        followers,source:'request',verified:false,addedAt:now(),addedBy:this.me.id,pricing:reel?{reel}:{}};
+      if(reel)rec.reelCost=reel;
+      this.db.roster.push(rec);fresh.push(rec);
+    }
+    if(fresh.length){
+      if(CLOUD){const payload=fresh.map(r=>{const d={...r};delete d.email;delete d.phone;delete d._cmask;delete d.id;return {id:r.id,data:d,contact:{}};});
+        const {error}=await SB.rpc('roster_sync',{p_rows:payload,p_removed:[]});if(error)console.error('registerRoundToRoster',error);
+        if(this._rosterIds)fresh.forEach(r=>this._rosterIds.add(r.id));}
+      else await store.set(K.roster,this.db.roster);
+    }
+    return fresh.length;
+  },
   async nextSeq(pfx){let s=await store.get(K.seq)||{};s[pfx]=(s[pfx]||0)+1;await store.set(K.seq,s);return pfx+'-'+String(s[pfx]).padStart(4,'0');},
 
   async seed(){
@@ -2333,11 +2366,12 @@ const App={
       this.stripBlankCols(rows);
       const cols=Object.keys(rows[0]);
       r.rounds.push({round:r.rounds.length+1,sheetName:file.name,rows,cols,total:rows.length,submittedBy:this.me.id,submittedAt:now(),decision:null,approvedCount:null,rejectedCount:null,reason:null,reviewedAt:null});
+      const _newRoster=await this.registerRoundToRoster(rows);
       r.status='under_review';r.submittedAt=now();this.pushEvent(r,`Round ${r.rounds.length} sheet submitted — ${rows.length} profiles`,'submit');
       if(r.campaignId){const c=this.camp(r.campaignId);if(c){c.sheetName=file.name;c.sheetRows=rows;c.sheetCols=cols;c.uploadedAt=now();c.uploadedBy=this.me.id;await this.save('camps');}}
       await this.notify(r.requesterId,'Profiles submitted for review',`${r.id} · ${r.brandName} — ${rows.length} profiles in round ${r.rounds.length}.`,'submit',{pref:'submitted',subject:`[DiscoverDesk] Ready to review: ${r.id}`,body:`${this.me.name} submitted ${rows.length} profiles for ${r.id} (${r.brandName}). Open DiscoverDesk to approve or request changes.`});
       await this.save('reqs');this.syncActsLocal();await this.save('acts');
-      this.toast(`Uploaded ${rows.length} profiles — sent for review`,'ok');this.renderNav();this.openReq(id);
+      this.toast(`Uploaded ${rows.length} profiles — sent for review${_newRoster?` · ${_newRoster} new added to roster`:''}`,'ok');this.renderNav();this.openReq(id);
       this.fireWebhook('round.submitted',{id:r.id,brand:r.brandName,round:r.rounds.length,profiles:rows.length,by:this.me.name});
     }catch(err){this.toast('Could not read that file','err');}};
     reader.readAsArrayBuffer(file);
@@ -4875,10 +4909,11 @@ Object.assign(App,{
       });
       rd.cols=['handle','name','followers','engagement','category','categories','city','cost'];
       rd.total=rd.rows.length;rd.sheetName=file.name;
+      const _newRoster=await this.registerRoundToRoster(rd.rows);
       this.pushEvent(r,`${add} profiles merged into round ${rd.round} from ${file.name}${dup?` (${dup} already there)`:''}`,'info');
       this.audit('round.import','req:'+r.id,{name:r.brandName,campaign:this.campName(r.campaignId),field:'round '+rd.round+' · +'+add});
       await this.save('reqs');this.syncActsLocal();await this.save('acts');
-      this.toast(`${add} profiles merged into round ${rd.round}${dup?` · ${dup} duplicates skipped`:''} — submit when ready`,'ok');
+      this.toast(`${add} profiles merged into round ${rd.round}${dup?` · ${dup} duplicates skipped`:''}${_newRoster?` · ${_newRoster} new added to roster`:''} — submit when ready`,'ok');
       this.openReq(id);
     }catch(err){this.toast('Could not read that file','err');}};
     reader.readAsArrayBuffer(file);
