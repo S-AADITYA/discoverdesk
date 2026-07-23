@@ -4910,6 +4910,8 @@ Object.assign(App,{
       rd.cols=['handle','name','followers','engagement','category','categories','city','cost'];
       rd.total=rd.rows.length;rd.sheetName=file.name;
       const _newRoster=await this.registerRoundToRoster(rd.rows);
+      // Mirror the uploaded creators into a "Request Uploads" tab in the Google Sheet.
+      if(CLOUD)fetch(API('/api/sheets-sync'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'append-uploads',reqId:r.id,brand:r.brandName,campaign:this.campName(r.campaignId),by:this.me.name,date:new Date().toISOString().slice(0,10),rows:rd.rows})}).catch(()=>{});
       this.pushEvent(r,`${add} profiles merged into round ${rd.round} from ${file.name}${dup?` (${dup} already there)`:''}`,'info');
       this.audit('round.import','req:'+r.id,{name:r.brandName,campaign:this.campName(r.campaignId),field:'round '+rd.round+' · +'+add});
       await this.save('reqs');this.syncActsLocal();await this.save('acts');

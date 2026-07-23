@@ -180,6 +180,24 @@ module.exports = async (req, res) => {
       });
     }
 
+    // Append request-uploaded creators to a dedicated "Request Uploads" tab in the sheet.
+    if (action === 'append-uploads') {
+      const TAB = 'Request Uploads';
+      const rows = Array.isArray(body.rows) ? body.rows : [];
+      if (!rows.length) return res.status(200).json({ ok: true, appended: 0 });
+      const meta = await sheets.spreadsheets.get({ spreadsheetId: SHEET_ID, fields: 'sheets.properties.title' });
+      const exists = (meta.data.sheets || []).some(s => s.properties.title === TAB);
+      if (!exists) {
+        await sheets.spreadsheets.batchUpdate({ spreadsheetId: SHEET_ID, requestBody: { requests: [{ addSheet: { properties: { title: TAB } } }] } });
+        await sheets.spreadsheets.values.update({ spreadsheetId: SHEET_ID, range: `'${TAB}'!A1`, valueInputOption: 'RAW',
+          requestBody: { values: [['Date', 'Request', 'Brand', 'Campaign', 'Name', 'Instagram Profile Link', 'Followers', 'Reel cost', 'Category', 'City', 'Uploaded by']] } });
+      }
+      const values = rows.map(r => [body.date || '', body.reqId || '', body.brand || '', body.campaign || '',
+        r.name || '', r.profileUrl || r.handle || '', r.followers || 0, r.cost || r.reelCost || 0, r.category || '', r.city || '', body.by || '']);
+      await sheets.spreadsheets.values.append({ spreadsheetId: SHEET_ID, range: `'${TAB}'!A1`, valueInputOption: 'RAW', insertDataOption: 'INSERT_ROWS', requestBody: { values } });
+      return res.status(200).json({ ok: true, tab: TAB, appended: values.length });
+    }
+
     if (action === 'pull') {
       // Which tabs? A specific SHEET_RANGE limits to one; otherwise every tab.
       let ranges;
