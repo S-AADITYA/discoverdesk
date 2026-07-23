@@ -1032,21 +1032,24 @@ const App={
 
       // Roster, through the masking view. Phone/email come back empty unless
       // this user holds the 'contacts' permission — decided in Postgres.
-      try{
-        const rows=await this.fetchAll('roster_v');
-        this.db.roster = rows.map(row=>({
-          ...row.data,
-          ...(row.contact||{}),
-          id:row.id,
-          _cmask:!row.contact_visible,
-        }));
-        this._kvFb.roster=false;
-      }catch(e){
-        console.warn('roster_v unavailable — using kv fallback:',e&&e.message);
-        this.db.roster = await store.get(K.roster)||[];
-        this._kvFb.roster=true;
-      }
-      this._rosterIds = new Set(this.db.roster.map(r=>r.id));
+      // Stage-2: the roster can be 10k+ rows (~9MB). Load it in the BACKGROUND so
+      // login and the first view (dashboard) aren't blocked. ensureRoster() awaits
+      // this before any roster-dependent view/feature reads this.db.roster.
+      this.db.roster = this.db.roster || [];
+      this._rosterLoaded = false;
+      this._rosterP = (async () => {
+        try{
+          const rows=await this.fetchAll('roster_v');
+          this.db.roster = rows.map(row=>({ ...row.data, ...(row.contact||{}), id:row.id, _cmask:!row.contact_visible }));
+          this._kvFb.roster=false;
+        }catch(e){
+          console.warn('roster_v unavailable — using kv fallback:',e&&e.message);
+          this.db.roster = await store.get(K.roster)||[];
+          this._kvFb.roster=true;
+        }
+        this._rosterIds = new Set(this.db.roster.map(r=>r.id));
+        this._rosterLoaded = true;
+      })();
 
       // Load everything else from KV
       for(const k in K){
@@ -1693,8 +1696,13 @@ const App={
     document.getElementById('side').classList.remove('open');
     const T={mission:['Mission Control','Your live discovery operation'],pool:['Campaign Pool','Build a creator pool per campaign'],audit:['Audit Log','Who did what, to the second'],deleted:['Deleted','Recoverable for 30 days'],dsearch:['Discovery Search','Natural-language creator search'],calendar:['My Calendar','Deadlines & campaign dates'],shortlist:['Shortlist Builder','Drag creators into match-scored groups'],compare:['Creator Comparison','Creators side by side'],dashboard:['Overview','Your department at a glance'],exec:['Dashboards','Executive views by role'],accessmap:['Who sees what','Module visibility by role & permission'],modulemap:['Module map','How every module connects — click any tile to see what it does'],board:['Board','Drag requests through the pipeline'],enquiries:['Enquiries','New business logged by Sales & KAM'],requests:['Requests','Discovery requests across brands'],discovery:['My Discovery','Requests assigned to you'],review:['Review Queue','Submissions waiting on you'],influencers:['Brand Sheets','A live influencer roster per brand'],creators:['Influencer 360','Every creator across all brands, rounds & pricing'],roster:['Roster','Your master influencer database · bulk upload & brand cost'],bridge:['Roster Bridge','Internal cost vs brand cost · live P&L'],clientview:['Client View','Client-safe view of selected creators'],campaigns:['Campaigns','One live sheet per campaign'],team:['Team','Your departments and who does what'],reports:['Reports','Performance, workload & exports'],inbox:['Inbox','Notifications & email drafts'],activity:['Activity','Everything that happened'],users:['People & Access','Accounts, roles & permissions'],integrations:['Integrations','Connect Meta / Instagram & live data']};
     document.getElementById('pageTitle').textContent=T[v][0];document.getElementById('pageCrumb').textContent=T[v][1];
-    ({mission:this.vMission,audit:this.vAudit,deleted:this.vDeleted,pool:this.vPool,dsearch:this.vDiscoverySearch,calendar:this.vCalendar,shortlist:this.vShortlist,compare:this.vCompare,dashboard:this.vDashboard,exec:this.vExec,accessmap:this.vAccessMap,modulemap:this.vModuleMap,board:this.vBoard,enquiries:this.vEnquiries,requests:this.vRequests,discovery:this.vDiscovery,review:this.vReview,influencers:this.vInfluencers,creators:this.vCreators,roster:this.vRoster,bridge:this.vBridge,clientview:this.vClientView,campaigns:this.vCampaigns,team:this.vTeam,reports:this.vReports,inbox:this.vInbox,activity:this.vActivity,users:this.vUsers,integrations:this.vIntegrations})[v].call(this);
+    const dispatch=()=>({mission:this.vMission,audit:this.vAudit,deleted:this.vDeleted,pool:this.vPool,dsearch:this.vDiscoverySearch,calendar:this.vCalendar,shortlist:this.vShortlist,compare:this.vCompare,dashboard:this.vDashboard,exec:this.vExec,accessmap:this.vAccessMap,modulemap:this.vModuleMap,board:this.vBoard,enquiries:this.vEnquiries,requests:this.vRequests,discovery:this.vDiscovery,review:this.vReview,influencers:this.vInfluencers,creators:this.vCreators,roster:this.vRoster,bridge:this.vBridge,clientview:this.vClientView,campaigns:this.vCampaigns,team:this.vTeam,reports:this.vReports,inbox:this.vInbox,activity:this.vActivity,users:this.vUsers,integrations:this.vIntegrations})[v].call(this);
+    // Stage-2: roster-dependent views wait for the background roster load once.
+    const ROSTER_VIEWS=new Set(['roster','creators','bridge','pool','shortlist','compare','dsearch']);
+    if(ROSTER_VIEWS.has(v)&&!this._rosterLoaded){this.set('<div style="padding:48px;text-align:center;color:var(--muted)">Loading roster…</div>');this.ensureRoster().then(dispatch);}
+    else dispatch();
   },
+  async ensureRoster(){if(this._rosterP)await this._rosterP;return this.db.roster;},
   set(h){const c=document.getElementById('content');c.innerHTML=h;c.classList.remove('view-in');void c.offsetWidth;c.classList.add('view-in');this.animateCounts();this.animateProgress&&this.animateProgress();this.startDeadlineTicks&&this.startDeadlineTicks();},
   user(id){return this.db.users.find(u=>u.id===id);},
   brand(id){return this.db.brands.find(b=>b.id===id);},
@@ -4909,6 +4917,7 @@ Object.assign(App,{
       });
       rd.cols=['handle','name','followers','engagement','category','categories','city','cost'];
       rd.total=rd.rows.length;rd.sheetName=file.name;
+      await this.ensureRoster();
       const _newRoster=await this.registerRoundToRoster(rd.rows);
       // Mirror the uploaded creators into a "Request Uploads" tab in the Google Sheet.
       if(CLOUD)fetch(API('/api/sheets-sync'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'append-uploads',reqId:r.id,brand:r.brandName,campaign:this.campName(r.campaignId),by:this.me.name,date:new Date().toISOString().slice(0,10),rows:rd.rows})}).catch(()=>{});
