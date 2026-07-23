@@ -1,3 +1,4 @@
 .vercel
 .env*
 scripts/rls-users.json
+node_modules

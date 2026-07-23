@@ -901,14 +901,16 @@ const ALL_PERMS=[['raise','Raise requests'],['enquiries','Manage enquiries'],['a
 /* Defaults per role key. 'raise' is off for discovery_employee (B8).
    The five legacy keys are kept as aliases so a session that loaded before
    the migration ran still resolves permissions instead of falling to {}. */
+/* Export/download is Admin-only (B-rule): only `admin` keeps `export`. Request
+   raisers (sales/kam) also lose `seeall`, so they see only their own requests. */
 const ROLE_DEFAULTS={
-  sales_employee:{raise:1,enquiries:1,review:1,influencers:0,clientview:1,brandcost:1,export:1,poolfill:1},
-  sales_manager:{raise:1,enquiries:1,review:1,influencers:0,clientview:1,brandcost:1,export:1,poolfill:1,seeall:1},
-  kam_employee:{raise:1,enquiries:1,review:1,influencers:1,roster:1,clientview:1,contacts:1,brandcost:1,export:1,poolfill:1},
-  kam_manager:{raise:1,enquiries:1,review:1,influencers:1,roster:1,clientview:1,contacts:1,brandcost:1,export:1,poolfill:1,seeall:1},
-  discovery_employee:{discover:1,influencers:1,roster:1,export:1,poolfill:1},
-  discovery_manager:{raise:1,enquiries:1,assign:1,review:1,discover:1,influencers:1,roster:1,clientview:1,contacts:1,brandcost:1,export:1,poolfill:1,seeall:1},
-  admin:{raise:1,enquiries:1,assign:1,discover:1,review:1,influencers:1,roster:1,bridge:1,brandcost:1,clientview:1,contacts:1,export:1,integrations:1,admin:1,poolfill:1},
+  sales_employee:{raise:1,enquiries:1,review:1,influencers:0,clientview:1,brandcost:1,poolfill:1},
+  sales_manager:{raise:1,enquiries:1,review:1,influencers:0,clientview:1,brandcost:1,poolfill:1},
+  kam_employee:{raise:1,enquiries:1,review:1,influencers:1,roster:1,clientview:1,contacts:1,brandcost:1,poolfill:1},
+  kam_manager:{raise:1,enquiries:1,review:1,influencers:1,roster:1,clientview:1,contacts:1,brandcost:1,poolfill:1},
+  discovery_employee:{discover:1,influencers:1,roster:1,poolfill:1},
+  discovery_manager:{raise:1,enquiries:1,assign:1,review:1,discover:1,influencers:1,roster:1,clientview:1,contacts:1,brandcost:1,poolfill:1,seeall:1},
+  admin:{raise:1,enquiries:1,assign:1,discover:1,review:1,influencers:1,roster:1,bridge:1,brandcost:1,clientview:1,contacts:1,export:1,integrations:1,admin:1,poolfill:1,seeall:1},
 };
 ROLE_DEFAULTS.sales=ROLE_DEFAULTS.sales_employee;
 ROLE_DEFAULTS.kam=ROLE_DEFAULTS.kam_employee;
@@ -1107,7 +1109,7 @@ const App={
           data:this.stripMeta(r),
         }));
         const {error}=await SB.from('requests').upsert(rows);
-        if(error)console.error('saveReqsCloud upsert',error);
+        if(error){console.error('saveReqsCloud upsert',error);this.toast('Request not saved to server: '+(error.message||error),'err');}
       }
       if(removed.length){
         const {error}=await SB.from('requests').delete().in('id',removed);
@@ -1452,6 +1454,16 @@ const App={
     if(this.view&&!busy)this.go(this.view);
   },
   can(perm){const u=this.me;if(u.perms&&u.perms[perm]!==undefined&&u.perms[perm]!==null)return !!u.perms[perm];return !!(ROLE_DEFAULTS[roleKey(u)]||{})[perm];},
+  // Export/download is Admin-only AND only inside the Roster module (B-rule).
+  canExport(){return this.can('export')&&this.view==='roster';},
+  // Adding creators to the roster is restricted to the Discovery Manager (+admin).
+  canAddRoster(){return this.roleKey()==='discovery_manager'||this.can('admin');},
+  // When Discovery adds a creator it lands in the roster AND is appended to a
+  // separate submissions log (who added what, when) in stored data.
+  async logRosterSubmission(rec){if(!SB||!rec)return;try{await SB.from('roster_submissions').insert({
+    creator_handle:rec.handle||'',creator_name:rec.name||'',platform:rec.platform||'',
+    added_by:this.me.id||null,added_by_name:this.me.name||'',added_by_role:this.roleKey(),data:rec});
+  }catch(e){console.error('logRosterSubmission',e);}},
   roleKey(u){return roleKey(u||this.me);},
   dept(u){return deptOf(u||this.me);},
   roleLabel(u){return ROLES[roleKey(u)]||'—';},
@@ -1496,9 +1508,9 @@ const App={
     const k=this.roleKey();
     if(k==='discovery_manager')return true;                       // all requests
     if(k==='discovery_employee')return r.assigneeId===this.me.id; // assigned only
-    if(k==='sales_employee'||k==='kam_employee')return r.requesterId===this.me.id;
-    if(k==='sales_manager'||k==='kam_manager')
-      return r.requesterId===this.me.id||this.inMyScope(this.user(r.requesterId));
+    // Request raisers (sales/KAM, employee AND manager) see ONLY their own (B-rule).
+    if(k==='sales_employee'||k==='kam_employee'||k==='sales_manager'||k==='kam_manager')
+      return r.requesterId===this.me.id;
     return r.requesterId===this.me.id||r.assigneeId===this.me.id;
   },
   visEnq(e){
@@ -1639,7 +1651,7 @@ const App={
 
   /* ---- exports ---- */
   export(rows,filename){
-    if(!this.can('export'))return this.toast('You don\'t have export permission','err');
+    if(!this.canExport())return this.toast('You don\'t have export permission','err');
     if(!rows||!rows.length)return this.toast('Nothing to export','err');
     try{const ws=XLSX.utils.json_to_sheet(rows);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Sheet1');XLSX.writeFile(wb,filename);this.toast('Downloaded '+filename,'ok');}catch(e){this.toast('Export failed','err');}
   },
@@ -1849,7 +1861,7 @@ const App={
     const eb=s=>({new:'b-new',qualified:'b-qualified',proposal:'b-proposal',won:'b-won',lost:'b-lost'}[s]||'b-draft');
     this.set(`
       <div class="pagehead"><div class="lead"><h2>Enquiries</h2><p>${E.length} logged · convert a qualified enquiry into a discovery request</p></div>
-        <div class="acts">${this.can('export')?`<button class="btn ghost" onclick="App.exportEnq()">${svg(IC.down,15)} Export</button>`:''}<button class="btn primary" onclick="App.openNewEnq()">${svg(IC.plus,16)} Log enquiry</button></div></div>
+        <div class="acts">${this.canExport()?`<button class="btn ghost" onclick="App.exportEnq()">${svg(IC.down,15)} Export</button>`:''}<button class="btn primary" onclick="App.openNewEnq()">${svg(IC.plus,16)} Log enquiry</button></div></div>
       ${(()=>{const all=this.myEnq();const cnt=s=>all.filter(e=>e.status===s).length;const open=all.filter(e=>!['won','lost'].includes(e.status)).length;const won=cnt('won');const closed=won+cnt('lost');const conv=closed?Math.round(won/closed*100):0;return `<div class="card pad" style="margin-bottom:16px"><div class="metric-row"><div class="m"><div class="v"><span class="cup" data-to="${all.length}">0</span></div><div class="l">Total</div></div><div class="m"><div class="v"><span class="cup" data-to="${open}">0</span></div><div class="l">Open</div></div><div class="m"><div class="v"><span class="cup" data-to="${cnt('qualified')}">0</span></div><div class="l">Qualified</div></div><div class="m"><div class="v"><span class="cup" data-to="${cnt('proposal')}">0</span></div><div class="l">Proposal</div></div><div class="m"><div class="v" style="color:var(--success)"><span class="cup" data-to="${won}">0</span></div><div class="l">Won</div></div><div class="m"><div class="v"><span class="cup" data-to="${conv}" data-suf="%">0%</span></div><div class="l">Win rate</div></div></div></div>`;})()}
       <div class="toolbar">${[['all','All'],['new','New'],['qualified','Qualified'],['proposal','Proposal'],['won','Won'],['lost','Lost']].map(([k,l])=>`<span class="chip ${(this._efilter||'all')===k?'on':''}" onclick="App._efilter='${k}';App.vEnquiries()">${l}</span>`).join('')}</div>
       <div class="card">${E.length?`<div class="tblwrap"><table class="tbl fixed"><thead><tr><th class="c-brand">Client</th><th class="c-camp">Campaign</th><th class="c-who">Service</th><th class="c-num">Budget</th><th class="c-who">Owner</th><th class="c-status">Source</th><th class="c-status">Status</th><th class="c-when">Logged</th><th style="width:44px"></th></tr></thead><tbody>
@@ -1925,7 +1937,7 @@ const App={
     this.set(`
       ${(()=>{const all=this.db.reqs.filter(x=>x.status!=='draft');const by=st=>all.filter(r=>r.status===st).length;const over=all.filter(r=>r.deadline&&r.deadline<now()&&r.status!=='approved').length;const unassigned=all.filter(r=>!r.assigneeId&&r.status!=='approved').length;const done=by('approved');const rate=all.length?Math.round(done/all.length*100):0;const kc=(l,v,col,click)=>`<div class="rqk" ${click?`onclick="${click}" style="cursor:pointer"`:''}><div class="rqk-v" style="${col?`color:${col}`:''}">${v}</div><div class="rqk-l">${l}</div></div>`;return `<div class="rqstrip">${kc('Open',all.length-done,'',`App.filters.status='all';App.filters.special=null;App.vRequests()`)}${kc('In discovery',by('in_progress'),'#5847eb',`App.filters.status='in_progress';App.vRequests()`)}${kc('In review',by('under_review'),'#7048e8',`App.filters.status='under_review';App.vRequests()`)}${kc('Delivered',done,'#0ea472',`App.filters.status='approved';App.vRequests()`)}${kc('Unassigned',unassigned,unassigned?'#e5484d':'',`App.filters.special='flagged';App.vRequests()`)}${kc('Overdue',over,over?'#e5484d':'',`App.filters.special='overdue';App.vRequests()`)}${kc('Delivery rate',rate+'%','#0ea472')}</div>`;})()}
       <div class="pagehead"><div class="lead"><h2>All requests</h2><p>${R.length} request${R.length!==1?'s':''} · ${this.redCount()} flagged · click a card above to filter</p></div>
-        <div class="acts">${this.can('export')?`<button class="btn ghost" onclick="App.exportReqs()">${svg(IC.down,15)} Export</button>`:''}${this.can('raise')?`<button class="btn primary" onclick="App.openNewReq()">${svg(IC.plus,16)} New request</button>`:''}</div></div>
+        <div class="acts">${this.canExport()?`<button class="btn ghost" onclick="App.exportReqs()">${svg(IC.down,15)} Export</button>`:''}${this.can('raise')?`<button class="btn primary" onclick="App.openNewReq()">${svg(IC.plus,16)} New request</button>`:''}</div></div>
       <div class="toolbar">${chips.map(([k,l])=>`<span class="chip ${f.status===k?'on':''}" onclick="App.filters.status='${k}';App.vRequests()">${l}</span>`).join('')}
         <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
         <span class="chip ${f.special==='flagged'?'on':''}" onclick="App.filters.special=App.filters.special==='flagged'?null:'flagged';App.vRequests()">${svg(IC.bolt,12)} Flagged</span>
@@ -1994,7 +2006,7 @@ const App={
     this.pushEvent(r,draft?'Draft created':'Request raised for '+brandName,'create');this.audit('req.create','req:'+r.id,{name:brandName,campaign:this._campName||''});if((r.suggestedCreators||[]).length){r.suggestedCreators.forEach(sc=>this.audit('req.suggest','req:'+r.id,{handle:sc.handle,name:sc.name,source:'sales-suggested'}));}this._reqPicks=[];
     if(!draft&&assignee){this.pushEvent(r,'Assigned to '+this.user(assignee).name,'assign');await this.notify(assignee,'New discovery request assigned',`${r.id} · ${brandName} — ${niche}. Due ${r.deadline?fmtDate(r.deadline):'soon'}.`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned: ${r.id} ${brandName}`,body:`You've been assigned ${r.id} (${brandName} — ${niche}).\nProfiles needed: ${r.qty}. Deadline: ${r.deadline?fmtDate(r.deadline):'TBD'}.\n\n— ${this.me.name}`});}
     this.db.reqs.push(r);
-    if(this._enqId){const e=this.db.enq.find(x=>x.id===this._enqId);if(e){e.brandId=brandId;e.status=e.status==='new'?'qualified':e.status;await this.save('enq');}}
+    if(this._enqId){const e=this.db.enq.find(x=>x.id===this._enqId);if(e){e.brandId=brandId;e.convertedRequestId=r.id;e.status=['won','lost'].includes(e.status)?e.status:'proposal';await this.save('enq');}}
     await this.save('reqs');this.syncActsLocal();await this.save('acts');
     this.closeAll();this.toast(draft?'Saved as draft':'Request raised 🎯','ok');this.renderNav();this.go('requests');
     if(!draft)this.fireWebhook('request.raised',{id:r.id,brand:brandName,niche,type,round:r.round,requester:this.me.name});
@@ -2063,10 +2075,10 @@ const App={
         </tbody></table></div>`:`<div class="revgrid" id="revgrid_${i}">${rd.rows.map((row,ri)=>this.reviewCard(r.id,i,row,ri,cols)).join('')}</div>`}
         <div class="divide"></div><div id="revc_${i}" class="cellsub" style="margin-bottom:10px"></div>
         <div class="frow"><button class="btn success" onclick="App.finishReview('${r.id}',${i},'deliver')">${svg(IC.check,15)} Approve shortlisted & deliver</button><button class="btn danger" onclick="App.finishReview('${r.id}',${i},'nextround')">${svg(IC.x,15)} Request round ${rd.round+1}</button></div>
-        ${this.can('export')?`<button class="btn ghost xs" style="margin-top:10px" onclick="App.exportRound('${r.id}',${i})">${svg(IC.down,13)} Download this sheet</button>`:''}
+        ${this.canExport()?`<button class="btn ghost xs" style="margin-top:10px" onclick="App.exportRound('${r.id}',${i})">${svg(IC.down,13)} Download this sheet</button>`:''}
       `:`
         <div class="revtable" style="margin:8px 0"><table class="tbl"><thead>${head}</thead><tbody>${rd.rows.map((row,ri)=>bodyRow(row,ri)).join('')}</tbody></table></div>
-        ${this.can('export')?`<button class="btn ghost xs" onclick="App.exportRound('${r.id}',${i})">${svg(IC.down,13)} Download this sheet</button>`:''}
+        ${this.canExport()?`<button class="btn ghost xs" onclick="App.exportRound('${r.id}',${i})">${svg(IC.down,13)} Download this sheet</button>`:''}
       `}
       </div></div>`;
   },
@@ -2301,13 +2313,13 @@ const App={
     const metaOn=(this._settings&&this._settings.meta&&this._settings.meta.token);
     this.set(`
       <div class="pagehead"><div class="lead"><h2>Brand sheets</h2><p>A live influencer roster held separately for each brand</p></div>
-        <div class="acts">${this.can('export')?`<button class="btn ghost" onclick="App.exportInfl('${bid}')">${svg(IC.down,15)} Export sheet</button>`:''}${canEdit?`<button class="btn ghost" onclick="App.importInflPrompt('${bid}')">${svg(IC.up,15)} Import sheet</button><button class="btn primary" onclick="App.openNewInfl('${bid}')">${svg(IC.plus,16)} Add influencer</button>`:''}</div></div>
+        <div class="acts">${this.canExport()?`<button class="btn ghost" onclick="App.exportInfl('${bid}')">${svg(IC.down,15)} Export sheet</button>`:''}${canEdit?`<button class="btn ghost" onclick="App.importInflPrompt('${bid}')">${svg(IC.up,15)} Import sheet</button><button class="btn primary" onclick="App.openNewInfl('${bid}')">${svg(IC.plus,16)} Add influencer</button>`:''}</div></div>
       <div class="tabs">${this.db.brands.map(b=>`<div class="tb ${b.id===bid?'on':''}" onclick="App._infSel={};App._brandTab='${b.id}';App.vInfluencers()">${esc(b.name)} <span class="cellsub">(${this.db.infl.filter(i=>i.brandId===b.id).length})</span></div>`).join('')}</div>
       <div class="toolbar">${statuses.map(s=>`<span class="chip ${(this._infStatus||'all')===s?'on':''}" onclick="App._infStatus='${s}';App.vInfluencers()" style="text-transform:capitalize">${s}</span>`).join('')}</div>
       <input type="file" id="inflFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="App.importInfl(event,'${bid}')">
       ${selIds.length?`<div class="selbar"><b>${selIds.length}</b> selected
         ${canEdit?`<select class="mini-select" style="color:var(--ink)" onchange="if(this.value)App.bulkStatus('${bid}',this.value)"><option value="">Set status…</option>${['shortlisted','contacted','confirmed','rejected'].map(s=>`<option value="${s}" style="text-transform:capitalize">${s}</option>`).join('')}</select>`:''}
-        ${this.can('export')?`<button class="btn ghost xs" onclick="App.exportInflSel('${bid}')">${svg(IC.down,13)} Export selected</button>`:''}
+        ${this.canExport()?`<button class="btn ghost xs" onclick="App.exportInflSel('${bid}')">${svg(IC.down,13)} Export selected</button>`:''}
         ${canEdit&&metaOn?`<button class="btn ghost xs" onclick="App.bulkEnrich('${bid}')">${svg(IC.spark,13)} Enrich from Meta</button>`:''}
         ${canEdit?`<button class="btn ghost xs" style="color:#fff" onclick="App.bulkDelInfl('${bid}')">Delete</button>`:''}
         <span style="flex:1"></span><button class="btn ghost xs" onclick="App._infSel={};App.vInfluencers()">Clear</button></div>`:''}
@@ -2527,7 +2539,7 @@ const App={
     this.set(`
       <div class="pagehead"><div class="lead"><h2>Discovery Search</h2><p>Describe who you need in plain words · ${aiOn?'AI parsing enabled':'local parsing (enable AI backend for true natural language)'}</p></div></div>
       <div class="card pad" style="margin-bottom:14px">
-        <div style="display:flex;gap:8px"><input class="inp" id="aiSearchQ" placeholder="e.g. fitness creators in Bangalore under ₹80k with authentic audience" onkeydown="if(event.key==='Enter')App.runAiSearch()" style="flex:1;font-size:14px"><button class="btn primary" onclick="App.runAiSearch()">${svg(IC.spark,15)} Search</button>${this.can('export')?'':''}</div>
+        <div style="display:flex;gap:8px"><input class="inp" id="aiSearchQ" placeholder="e.g. fitness creators in Bangalore under ₹80k with authentic audience" onkeydown="if(event.key==='Enter')App.runAiSearch()" style="flex:1;font-size:14px"><button class="btn primary" onclick="App.runAiSearch()">${svg(IC.spark,15)} Search</button>${this.canExport()?'':''}</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">${['fashion creators in Mumbai under ₹1 lakh','mega fitness female instagram','authentic beauty micro creators','barter travel creators in Goa'].map(ex=>`<span class="chip" onclick="document.getElementById('aiSearchQ').value='${ex.replace(/'/g,"")}';App.runAiSearch()">${ex}</span>`).join('')}</div>
         <div style="display:flex;justify-content:space-between;margin-top:10px"><button class="btn ghost xs" onclick="App.saveCurrentSearch()">${svg(IC.plus,12)} Save this search</button></div>
       </div>
@@ -2762,7 +2774,7 @@ const App={
     const actIcon=(ac)=>ac.includes('add')?'#0ea472':ac.includes('edit')?'#e0900a':ac.includes('delete')||ac.includes('reject')?'#e5484d':'#5847eb';
     this.set(`
       <div class="pagehead"><div class="lead"><h2>Audit Log</h2><p>Every action, tracked to the second \u00b7 ${nfmt(A.length)} events</p></div>
-        <div class="acts">${this.can('export')?`<button class="btn ghost" onclick="App.exportAudit()">${svg(IC.down,15)} Export</button>`:''}</div></div>
+        <div class="acts">${this.canExport()?`<button class="btn ghost" onclick="App.exportAudit()">${svg(IC.down,15)} Export</button>`:''}</div></div>
       ${dups.length?`<div class="card pad" style="margin-bottom:14px;border-color:var(--warn,#e0900a)">
         <div style="font-weight:600;color:var(--warn,#e0900a);margin-bottom:8px">${svg(IC.bolt,15)} Duplicate-add alerts (${dups.length})</div>
         ${dups.slice(0,6).map(d=>`<div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--line-2);font-size:13px"><div><b>@${esc(d.handle)}</b> added <b>${d.total}\u00d7</b> by ${d.people} ${d.people>1?'people':'person'}</div>${d.repeatOffenders.length?`<span class="cellsub">${d.repeatOffenders.map(([n,c])=>esc(n)+' ('+c+'\u00d7)').join(', ')}</span>`:''}</div>`).join('')}
@@ -3050,7 +3062,7 @@ const App={
     const card=(r,inBucket)=>{const m=this.matchScore(r,this.matchBrief());const risks=this.riskFlags(r);return `<div class="slcard" draggable="true" ondragstart="App.slDrag(event,'${r.id}')"><div style="display:flex;align-items:center;gap:9px"><span class="avatar av" style="background:${this.avatarColor(r.handle)}">${initials(r.name||r.handle)}</span><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.name||('@'+r.handle))}</div><div class="cellsub">${nfmt(r.followers)} · ${esc(r.category||'—')}</div></div><span class="hpill" style="--h:${m.overall}">${m.overall}</span></div>${risks.length?`<div class="cellsub" style="margin-top:6px;color:${risks[0].lv==='high'?'var(--danger)':'var(--warn,#e0900a)'}">${svg(IC.bolt,11)} ${risks[0].t}</div>`:''}</div>`;};
     this.set(`
       <div class="pagehead"><div class="lead"><h2>Shortlist Builder</h2><p>Drag creators into groups · match score is a transparent formula, not AI</p></div>
-        <div class="acts">${this.can('export')?`<button class="btn ghost" onclick="App.exportShortlist()">${svg(IC.down,15)} Export shortlist</button>`:''}<button class="btn ghost" onclick="App._buckets={};App.vShortlist()">Clear</button></div></div>
+        <div class="acts">${this.canExport()?`<button class="btn ghost" onclick="App.exportShortlist()">${svg(IC.down,15)} Export shortlist</button>`:''}<button class="btn ghost" onclick="App._buckets={};App.vShortlist()">Clear</button></div></div>
       <div class="notice" style="margin-bottom:14px">${svg(IC.spark,15)}<div>Match score weighs audience fit, budget, category, brand-safety, performance & availability against the last opened request's brief. It's explainable and rule-based — see the vision doc for the ML version.</div></div>
       <div class="sl-wrap">
         <div class="sl-pool card pad" ondragover="event.preventDefault()" ondrop="App.slDrop(event,'pool')">
@@ -3161,7 +3173,7 @@ const App={
     const shown=list.slice(0,300);
     this.set(`
       <div class="pagehead"><div class="lead"><h2>Influencer 360</h2><p>${total} unique creators aggregated from every brand sheet & round · click one for their full profile</p></div>
-        <div class="acts">${this.can('export')?`<button class="btn ghost" onclick="App.exportCreators()">${svg(IC.down,15)} Export directory</button>`:''}${(this._settings&&this._settings.meta&&this._settings.meta.token)?`<button class="btn ghost" onclick="App.refreshAllLive()">${svg(IC.refresh,15)} Live refresh</button>`:''}</div></div>
+        <div class="acts">${this.canExport()?`<button class="btn ghost" onclick="App.exportCreators()">${svg(IC.down,15)} Export directory</button>`:''}${(this._settings&&this._settings.meta&&this._settings.meta.token)?`<button class="btn ghost" onclick="App.refreshAllLive()">${svg(IC.refresh,15)} Live refresh</button>`:''}</div></div>
       <div class="grid kpis" style="margin-bottom:16px">
         <div class="card kpi"><div class="ic" style="background:#5847eb20;color:#5847eb">${svg(IC.people,19)}</div><div class="v"><span class="cup" data-to="${total}">0</span></div><div class="l">Unique creators</div></div>
         <div class="card kpi"><div class="ic" style="background:#2b7fff20;color:#2b7fff">${svg(IC.brand,19)}</div><div class="v"><span class="cup" data-to="${multi}">0</span></div><div class="l">Used by 2+ brands</div></div>
@@ -3233,15 +3245,26 @@ const App={
     if(!this.can('roster'))return this.set(this.emptyBox('No access','The roster is available to Discovery, KAM & Admin.'));
     const tab=this._rtab||'dashboard';const dupN=this.rosterDupes().groups.length;
     const head=`<div class="pagehead"><div class="lead"><h2>Roster</h2><p>Your master influencer database · Sheets sync & 8-hour auto-refresh</p></div>
-      <div class="acts"><button class="btn ghost" onclick="App.syncSheets()">${svg(IC.refresh,15)} Sync sheets</button><button class="btn ghost" onclick="App.duplicatesModal()">${svg(IC.brand,15)} Duplicates${dupN?` <span class="badge b-rejected" style="font-size:9px">${dupN}</span>`:''}</button><button class="btn ghost" onclick="App.rosterTemplate()">${svg(IC.down,15)} Template</button><button class="btn ghost" onclick="document.getElementById('rosterFile').click()">${svg(IC.up,15)} Import</button><button class="btn ghost" onclick="App.hashfameImport()">${svg(IC.up,15)} Hashfame</button>${this.can('export')?`<button class="btn ghost" onclick="App.exportRoster()">${svg(IC.down,15)} Export</button>`:''}<button class="btn ghost" onclick="App.loadTestData(150)">${svg(IC.plus,15)} Sample data</button><button class="btn primary" onclick="App.addRosterOne()">${svg(IC.plus,16)} Add creator</button></div></div>
+      <div class="acts">${this.canAddRoster()?`<button class="btn ghost" onclick="App.syncSheets()">${svg(IC.refresh,15)} Sync sheets</button>`:''}<button class="btn ghost" onclick="App.duplicatesModal()">${svg(IC.brand,15)} Duplicates${dupN?` <span class="badge b-rejected" style="font-size:9px">${dupN}</span>`:''}</button><button class="btn ghost" onclick="App.rosterTemplate()">${svg(IC.down,15)} Template</button>${this.canAddRoster()?`<button class="btn ghost" onclick="document.getElementById('rosterFile').click()">${svg(IC.up,15)} Import</button><button class="btn ghost" onclick="App.hashfameImport()">${svg(IC.up,15)} Hashfame</button>`:''}${this.canExport()?`<button class="btn ghost" onclick="App.exportRoster()">${svg(IC.down,15)} Export</button>`:''}${this.canAddRoster()?`<button class="btn primary" onclick="App.addRosterOne()">${svg(IC.plus,16)} Add creator</button>`:''}</div></div>
       <input type="file" id="rosterFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="App.rosterUpload(event)">
       <div class="card pad" style="margin-bottom:16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
         <span class="live-pill ${CLOUD?'cloud':'local'}" style="padding:4px 10px"><span class="ld"></span>${CLOUD?'Backend live':'Local demo'}</span>
         <div><div style="font-weight:600;font-size:13px">Google Sheets \u21c4 Roster</div><div class="cellsub">Two-way sync every 30 min · provider auto-refresh every 8h</div></div>
+        <span id="sheetsLink" class="badge b-pending"><span class="d"></span>Checking sheet…</span>
         <span style="flex:1"></span>${this.can('integrations')?`<button class="btn ghost sm" onclick="App.go('integrations')">${svg(IC.plug,14)} Connect Sheets & provider</button>`:''}</div>
       <div class="rtab"><button class="${tab==='dashboard'?'on':''}" onclick="App._rtab='dashboard';App.vRoster()">Dashboard</button><button class="${tab==='all'?'on':''}" onclick="App._rtab='all';App.vRoster()">All creators</button><button class="${tab==='mis'?'on':''}" onclick="App._rtab='mis';App.vRoster()">MIS / Reports</button></div>`;
     let body=tab==='dashboard'?this.rosterDash():tab==='mis'?this.rosterMis():this.rosterAll();
-    this.set(head+body);
+    this.set(head+body);this.checkSheetsLink();
+  },
+  // Live health check of the Google Sheets link (fast; no sync). Updates the badge.
+  async checkSheetsLink(){
+    const el=document.getElementById('sheetsLink');if(!el)return;
+    if(!CLOUD){el.className='badge b-pending';el.innerHTML='<span class="d"></span>Local demo';return;}
+    try{
+      const r=await fetch(API('/api/sheets-sync?status=1'));const j=await r.json();
+      if(j&&j.ok&&j.linked){el.className='badge b-active';el.innerHTML=`<span class="d"></span>Sheet linked ✓ · ${j.tabs} tabs`;el.title=(j.title||'')+' — auto-syncs daily';}
+      else{el.className='badge b-rejected';el.innerHTML='<span class="d"></span>Sheet not linked';el.title=(j&&j.error)||'';}
+    }catch(e){el.className='badge b-rejected';el.innerHTML='<span class="d"></span>Sheet check failed';}
   },
   rosterDash(){
     const R=this.rosterList();const priced=R.filter(r=>this.priceOf(r)==='priced');const barter=R.filter(r=>this.priceOf(r)==='barter');const none=R.filter(r=>this.priceOf(r)==='none');
@@ -3332,7 +3355,7 @@ const App={
     const rows=[['With price','#0ea472',grp('priced')],['Barter','#e0900a',grp('barter')],['No price','#8a8a9a',grp('none')]];
     const niches={};R.forEach(r=>{if(this.priceOf(r)!=='priced')return;const n=r.category||'Other';(niches[n]=niches[n]||[]).push(r);});
     const members={};R.forEach(r=>{if(this.priceOf(r)!=='priced')return;(members[r.addedBy]=members[r.addedBy]||[]).push(r);});
-    return `<div class="card pad" style="margin-bottom:16px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><div><div style="font-family:var(--disp);font-weight:600;font-size:16px">Roster summary by price list</div><div class="cellsub">Creators, reach and reel-cost economics</div></div>${this.can('export')?`<button class="btn ghost sm" onclick="App.exportRoster()">${svg(IC.down,14)} Export report</button>`:''}</div>
+    return `<div class="card pad" style="margin-bottom:16px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><div><div style="font-family:var(--disp);font-weight:600;font-size:16px">Roster summary by price list</div><div class="cellsub">Creators, reach and reel-cost economics</div></div>${this.canExport()?`<button class="btn ghost sm" onclick="App.exportRoster()">${svg(IC.down,14)} Export report</button>`:''}</div>
       <table class="tbl" style="margin-top:10px"><thead><tr><th>List</th><th style="text-align:right">Creators</th><th style="text-align:right">Followers</th><th style="text-align:right">Avg reel</th><th style="text-align:right">Total reel value</th></tr></thead><tbody>
       ${rows.map(([l,c,a])=>`<tr><td><span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${c};margin-right:8px"></span>${l}</td><td style="text-align:right">${a.length}</td><td style="text-align:right" class="mono">${a.length?nfmt(sumF(a)):'\u2014'}</td><td style="text-align:right" class="mono">${l==='With price'?inr(avgReel(a)):'\u2014'}</td><td style="text-align:right" class="mono">${l==='With price'?inr(sumReel(a)):'\u2014'}</td></tr>`).join('')}
       <tr style="font-weight:700;border-top:2px solid var(--line)"><td>Total</td><td style="text-align:right">${R.length}</td><td style="text-align:right" class="mono">${nfmt(sumF(R))}</td><td style="text-align:right">\u2014</td><td style="text-align:right" class="mono">${inr(sumReel(R))}</td></tr>
@@ -3503,7 +3526,7 @@ const App={
           <div style="flex:1;min-width:200px"><div style="font-family:var(--disp);font-size:24px;font-weight:600">${esc(r.name||('@'+r.handle))}</div>
           <div class="cellsub">${esc(r.platform||'Instagram')} \u00b7 \ud83d\udccd ${esc(r.city||r.country||'\u2014')} \u00b7 <a href="${esc(r.profileUrl||'#')}" target="_blank" style="color:var(--primary);font-weight:600;text-decoration:none">Open profile \u2197</a></div>
           <div class="pill-row" style="margin-top:8px"><span class="tag">${esc(r.category||'Other')}</span><span class="tag">${tier}</span><span class="ptype ${pt}">${ptl}</span></div></div>
-          <div style="display:flex;gap:8px;flex:none">${metaOn?`<button class="btn ghost sm" onclick="App.updateCreatorLive('${this.cnorm(r.handle).replace(/'/g,"")}')">${svg(IC.refresh,14)} Update live</button>`:''}<button class="btn primary sm" onclick="App.execFromCreator('${r.id}')">${svg(IC.plus,14)} Execution</button><button class="btn ghost sm" onclick="App.creatorToPool('${r.id}')">${svg(IC.people,14)} To campaign pool</button><button class="btn ghost sm" onclick="App.replaceModal('${r.id}')">${svg(IC.spark,14)} Replacement</button><button class="btn ghost sm" onclick="App.closeAll();App.editRoster('${r.id}')">Edit</button>${this.can('export')?`<button class="btn ghost sm" onclick="App.exportOneCreator('${r.id}')">${svg(IC.down,14)}</button>`:''}</div>
+          <div style="display:flex;gap:8px;flex:none">${metaOn?`<button class="btn ghost sm" onclick="App.updateCreatorLive('${this.cnorm(r.handle).replace(/'/g,"")}')">${svg(IC.refresh,14)} Update live</button>`:''}<button class="btn primary sm" onclick="App.execFromCreator('${r.id}')">${svg(IC.plus,14)} Execution</button><button class="btn ghost sm" onclick="App.creatorToPool('${r.id}')">${svg(IC.people,14)} To campaign pool</button><button class="btn ghost sm" onclick="App.replaceModal('${r.id}')">${svg(IC.spark,14)} Replacement</button><button class="btn ghost sm" onclick="App.closeAll();App.editRoster('${r.id}')">Edit</button>${this.canExport()?`<button class="btn ghost sm" onclick="App.exportOneCreator('${r.id}')">${svg(IC.down,14)}</button>`:''}</div>
         </div>
         <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:18px">
           ${kpi('Followers',nfmt(+r.followers||0),'')}
@@ -3602,22 +3625,23 @@ const App={
     }catch(err){this.toast('Could not read that file','err');}};
     reader.readAsArrayBuffer(f);
   },
-  addRosterOne(){this.editRoster(null);},
+  addRosterOne(){if(!this.canAddRoster())return this.toast('Only the Discovery Manager can add creators','err');this.editRoster(null);},
   editRoster(id){const r=id?this.db.roster.find(x=>x.id===id):{};
     this.modal(`<div class="mhead"><div><h3>${id?'Edit':'Add'} influencer</h3><p>Master roster record</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div>
       <div class="mbody"><div class="frow"><div class="field"><label>Handle</label><input class="inp" id="ro_h" value="${esc(r.handle||'')}" placeholder="creatorname"></div><div class="field"><label>Platform</label><input class="inp" id="ro_p" value="${esc(r.platform||'Instagram')}"></div></div>
       <div class="frow"><div class="field"><label>Followers</label><input class="inp" id="ro_f" type="number" value="${r.followers||''}"></div><div class="field"><label>Engagement</label><input class="inp" id="ro_e" value="${esc(r.eng||'')}" placeholder="3.2%"></div></div>
       <div class="frow"><div class="field"><label>Category</label><input class="inp" id="ro_c" value="${esc(r.category||'')}" placeholder="Fashion"></div><div class="field"><label>City</label><input class="inp" id="ro_city" value="${esc(r.city||'')}"></div><div class="field"><label>Email</label><input class="inp" id="ro_email" type="email" value="${esc(r.email||'')}" placeholder="creator@email.com"></div></div>
       <div class="frow"><div class="field"><label>Brand cost (₹)</label><input class="inp" id="ro_bc" type="number" value="${r.brandCost||''}"></div>${this.can('bridge')?`<div class="field"><label>Internal cost (₹)</label><input class="inp" id="ro_ic" type="number" value="${r.internalCost||''}"></div>`:''}</div></div>
-      <div class="mfoot">${id?`<button class="btn ghost" style="margin-right:auto;color:var(--danger)" onclick="App.delRoster('${id}')">Delete</button>`:''}<button class="btn ghost" onclick="App.closeAll()">Cancel</button><button class="btn primary" onclick="App.saveRoster('${id||''}')">Save</button></div>`);
+      <div class="mfoot">${id&&this.can('admin')?`<button class="btn ghost" style="margin-right:auto;color:var(--danger)" onclick="App.delRoster('${id}')">Delete</button>`:''}<button class="btn ghost" onclick="App.closeAll()">Cancel</button><button class="btn primary" onclick="App.saveRoster('${id||''}')">Save</button></div>`);
   },
   async saveRoster(id){const h=this.cnorm(document.getElementById('ro_h').value);if(!h)return this.toast('Handle required','err');
+    if(!id&&!this.canAddRoster())return this.toast('Only the Discovery Manager can add creators','err');
     const rec={handle:h,platform:document.getElementById('ro_p').value.trim(),followers:+document.getElementById('ro_f').value||0,eng:document.getElementById('ro_e').value.trim(),category:document.getElementById('ro_c').value.trim(),city:document.getElementById('ro_city').value.trim(),email:(document.getElementById('ro_email')||{}).value?document.getElementById('ro_email').value.trim():'',brandCost:+document.getElementById('ro_bc').value||0,internalCost:this.can('bridge')?(+document.getElementById('ro_ic').value||0):(id?this.db.roster.find(x=>x.id===id)?.internalCost||0:0)};
     if(id){const ex=this.db.roster.find(x=>x.id===id);const changed=Object.keys(rec).filter(k=>ex[k]!==rec[k]&&typeof rec[k]!=='object').slice(0,4);Object.assign(ex,rec);this.audit('creator.edit','creator:'+h,{handle:h,name:rec.name,field:changed.join(', ')});}else{this.db.roster.push({id:uid(),...rec,addedAt:now(),addedBy:this.me.id});this.audit('creator.add','creator:'+h,{handle:h,name:rec.name,source:'manual'});}
     await this.save('roster');this.closeAll();this.toast('Saved','ok');this.vRoster();
   },
-  async delRoster(id){const _dr=this.db.roster.find(x=>x.id===id);if(_dr)this.audit('creator.delete','creator:'+_dr.handle,{handle:_dr.handle,name:_dr.name});this.db.roster=this.db.roster.filter(x=>x.id!==id);await this.save('roster');this.closeAll();this.toast('Deleted','ok');this.vRoster();},
-  exportRoster(){this.export((this.db.roster||[]).map(r=>({Handle:'@'+r.handle,Platform:r.platform,Followers:r.followers,Engagement:r.eng,Category:r.category,City:r.city,BrandCost:r.brandCost,InternalCost:r.internalCost})),'roster.xlsx');},
+  async delRoster(id){if(!this.can('admin'))return this.toast('Only Admin can delete','err');const _dr=this.db.roster.find(x=>x.id===id);if(_dr)this.audit('creator.delete','creator:'+_dr.handle,{handle:_dr.handle,name:_dr.name});this.db.roster=this.db.roster.filter(x=>x.id!==id);await this.save('roster');this.closeAll();this.toast('Deleted','ok');this.vRoster();},
+  exportRoster(){if(!this.canExport())return this.toast('Only Admin can export, from the Roster module','err');this.export((this.db.roster||[]).map(r=>({Handle:'@'+r.handle,Platform:r.platform,Followers:r.followers,Engagement:r.eng,Category:r.category,City:r.city,BrandCost:r.brandCost,InternalCost:r.internalCost})),'roster.xlsx');},
   rosterTemplate(){this.export([{handle:'creatorname',name:'Full Name',platform:'Instagram',followers:120000,engagement:'4.2%',category:'Fashion',city:'Mumbai',country:'India',language:'Hindi, English',price_type:'priced',reel_cost:60000,video_story:20000,store_visit:30000,brand_cost:90000,internal_cost:54000,email:'name@email.com',phone:'+91...'}],'roster_upload_template.xlsx');this.toast('Template downloaded — fill it and use Import','ok');},
   helpTour(){
     const step=(n,color,title,body)=>`<div style="display:flex;gap:12px;margin-bottom:14px"><span style="flex:none;width:26px;height:26px;border-radius:8px;background:${color};color:#fff;display:grid;place-items:center;font-weight:700;font-size:13px">${n}</span><div><div style="font-weight:600;font-size:14px">${title}</div><div class="cellsub" style="line-height:1.5">${body}</div></div></div>`;
@@ -3673,7 +3697,7 @@ const App={
       </div><div class="mfoot"><button class="btn primary" onclick="App.closeAll()">Done</button></div>`);
   },
   async keepOne(id,gi){const {groups}=this.rosterDupes();const g=groups[gi];if(!g)return;const remove=g.records.filter(r=>r.id!==id).map(r=>r.id);this.db.roster=this.db.roster.filter(r=>!remove.includes(r.id));await this.save('roster');this.toast('Merged — removed '+remove.length,'ok');this.duplicatesModal();},
-  async delRosterDup(id){this.db.roster=this.db.roster.filter(r=>r.id!==id);await this.save('roster');this.toast('Deleted','ok');this.duplicatesModal();},
+  async delRosterDup(id){if(!this.can('admin'))return this.toast('Only Admin can delete','err');this.db.roster=this.db.roster.filter(r=>r.id!==id);await this.save('roster');this.toast('Deleted','ok');this.duplicatesModal();},
 
   /* ================= ROSTER BRIDGE (P&L) ================= */
   vBridge(){
@@ -3687,7 +3711,7 @@ const App={
     const bar=(data)=>{const max=Math.max(1,...data.map(d=>d[1]));return data.map(([l,v])=>`<div class="barrow"><div class="bl">${esc(l)}</div><div class="bt"><div class="bf" style="width:${Math.max(6,v/max*100)}%">${v?('₹'+nfmt(v)):''}</div></div></div>`).join('')||'<div class="cellsub">No data</div>';};
     const byCat={};R.forEach(r=>{const c=r.category||'—';byCat[c]=byCat[c]||{rev:0,cost:0};byCat[c].rev+=+r.brandCost||0;byCat[c].cost+=+r.internalCost||0;});
     this.set(`
-      <div class="pagehead"><div class="lead"><h2>Roster Bridge</h2><p>Internal cost vs brand cost · live profit & loss across your roster</p></div>${this.can('export')?`<button class="btn ghost" onclick="App.exportBridge()">${svg(IC.down,15)} Export P&L</button>`:''}</div>
+      <div class="pagehead"><div class="lead"><h2>Roster Bridge</h2><p>Internal cost vs brand cost · live profit & loss across your roster</p></div>${this.canExport()?`<button class="btn ghost" onclick="App.exportBridge()">${svg(IC.down,15)} Export P&L</button>`:''}</div>
       <div class="grid kpis" style="margin-bottom:16px">
         <div class="card kpi"><div class="ic" style="background:#2b7fff20;color:#2b7fff">${svg(IC.report,19)}</div><div class="v">₹<span class="cup" data-to="${rev}">0</span></div><div class="l">Brand cost (revenue)</div></div>
         <div class="card kpi"><div class="ic" style="background:#e0900a20;color:#e0900a">${svg(IC.brand,19)}</div><div class="v">₹<span class="cup" data-to="${cost}">0</span></div><div class="l">Internal cost</div></div>
@@ -3953,7 +3977,7 @@ const App={
     else{this.db.infl.push({id:uid(),brandId:bid,addedBy:this.me.id,addedAt:now(),...data});}
     await this.save('infl');this.closeAll();this.toast('Saved','ok');this.vInfluencers();
   },
-  async delInfl(id){this.db.infl=this.db.infl.filter(x=>x.id!==id);await this.save('infl');this.closeAll();this.toast('Removed','ok');this.vInfluencers();},
+  async delInfl(id){if(!this.can('admin'))return this.toast('Only Admin can delete','err');this.db.infl=this.db.infl.filter(x=>x.id!==id);await this.save('infl');this.closeAll();this.toast('Removed','ok');this.vInfluencers();},
   importInflPrompt(bid){document.getElementById('inflFile').click();},
   importInfl(ev,bid){
     const f=ev.target.files[0];if(!f)return;const reader=new FileReader();
@@ -4027,7 +4051,7 @@ const App={
       <div class="mbody">
         ${this.campIntelBar(c)}
         <div class="specgrid">${spec('Requests',reqs.length)}${spec('Delivered',done)}${spec('Rounds',reqs.reduce((s,r)=>s+r.rounds.length,0))}${spec('Profiles in sheet',S.prof)}${spec('Roster',infl.length)}${spec('Confirmed creators',confirmed.length)}</div>
-        <div class="actbar">${c.sheetName?`<button class="btn ghost sm" onclick="App.viewCampSheet('${c.id}')">View sheet</button>${this.can('export')?`<button class="btn ghost sm" onclick="App.exportCamp('${c.id}')">${svg(IC.down,14)} Export sheet</button>`:''}`:''}${this.can('raise')?`<button class="btn primary sm" onclick="App.closeAll();App.openNewReq()">${svg(IC.plus,14)} New request</button>`:''}</div>
+        <div class="actbar">${c.sheetName?`<button class="btn ghost sm" onclick="App.viewCampSheet('${c.id}')">View sheet</button>${this.canExport()?`<button class="btn ghost sm" onclick="App.exportCamp('${c.id}')">${svg(IC.down,14)} Export sheet</button>`:''}`:''}${this.can('raise')?`<button class="btn primary sm" onclick="App.closeAll();App.openNewReq()">${svg(IC.plus,14)} New request</button>`:''}</div>
         <div class="sec-t">Linked requests</div>
         ${reqs.length?reqs.map(r=>`<div class="card pad" style="padding:11px;margin-bottom:8px;cursor:pointer" onclick="App.openReq('${r.id}')"><div style="display:flex;justify-content:space-between;align-items:center"><div><div class="mono cellsub">${r.id}</div><div style="font-weight:600;font-size:12.5px">${esc(r.niche)} · R${r.round}</div></div><div style="text-align:right">${statusBadge(r.status)} ${this.flagBadge(r)}</div></div></div>`).join(''):'<div class="cellsub">No requests linked yet.</div>'}
         <div class="sec-t">Confirmed creators ${confirmed.length?`<span class="badge b-approved" style="text-transform:none">${confirmed.length}</span>`:''}</div>
@@ -4075,7 +4099,7 @@ const App={
     const rngTabs=[['7','7d'],['30','30d'],['90','90d'],['all','All']].map(([k,l])=>`<button class="${range===k?'on':''}" onclick="App._range='${k}';App.vReports()">${l}</button>`).join('');
     this.set(`
       <div class="pagehead"><div class="lead"><h2>Reports</h2><p>Live performance across the desk</p></div>
-        <div class="acts"><span class="range-tab">${rngTabs}</span>${this.can('export')?`<button class="btn ghost" onclick="App.exportReport()">${svg(IC.down,15)} Export</button>`:''}</div></div>
+        <div class="acts"><span class="range-tab">${rngTabs}</span>${this.canExport()?`<button class="btn ghost" onclick="App.exportReport()">${svg(IC.down,15)} Export</button>`:''}</div></div>
       <div class="grid kpis" style="margin-bottom:16px">
         <div class="card kpi"><div class="ic" style="background:#5847eb20;color:#5847eb">${svg(IC.req,19)}</div><div class="v">${R.length}</div><div class="l">Requests</div></div>
         <div class="card kpi"><div class="ic" style="background:#0ea47220;color:#0ea472">${svg(IC.check,19)}</div><div class="v">${delivered.length}</div><div class="l">Delivered</div></div>
@@ -4156,7 +4180,7 @@ const App={
 
   /* ================= ACTIVITY ================= */
   vActivity(){
-    this.set(`<div class="pagehead"><div class="lead"><h2>Activity log</h2><p>Every event, newest first · ${this.db.acts.length} total</p></div>${this.can('export')?`<button class="btn ghost" onclick="App.export(App.db.acts.map(a=>({When:fmtDT(a.t),Who:App.user(a.by)?.name,Brand:a.brand,Event:a.tx})),'activity.xlsx')">${svg(IC.down,15)} Export</button>`:''}</div>
+    this.set(`<div class="pagehead"><div class="lead"><h2>Activity log</h2><p>Every event, newest first · ${this.db.acts.length} total</p></div>${this.canExport()?`<button class="btn ghost" onclick="App.export(App.db.acts.map(a=>({When:fmtDT(a.t),Who:App.user(a.by)?.name,Brand:a.brand,Event:a.tx})),'activity.xlsx')">${svg(IC.down,15)} Export</button>`:''}</div>
       <div class="card pad"><div class="timeline">${this.db.acts.map(a=>{const u=this.user(a.by),r=this.req(a.reqId);return `<div class="tl-item ${a.kind==='reject'?'rej':(a.kind==='submit'||a.kind==='approve'?'ok':'')}" ${r?`onclick="App.openReq('${a.reqId}')" style="cursor:pointer"`:''}><div class="tt">${esc(a.tx)}</div><div class="tm">${esc(u?u.name:'—')} · ${esc(a.brand||'')} · ${fmtDT(a.t)}</div></div>`;}).join('')||'<div class="cellsub">No activity</div>'}</div></div>`);
   },
 
@@ -4303,7 +4327,7 @@ const App={
   vUsers(){
     if(!this.can('admin'))return this.set(this.emptyBox('Admins only','You don\'t have access to People & Access.'));
     const pending=this.db.users.filter(u=>u.status==='pending'),active=this.db.users.filter(u=>u.status==='active'),disabled=this.db.users.filter(u=>u.status==='disabled');
-    const row=u=>`<tr><td><div class="who"><span class="avatar av">${initials(u.name)}</span><div><div class="nm">${esc(u.name)} ${u.locked?'<span class="badge b-primary" style="background:var(--primary-soft);color:var(--primary-deep);font-size:10px">Permanent admin</span>':''}</div><div class="cellsub">${esc(u.email)}</div></div></div></td><td><span class="badge b-draft" style="text-transform:none">${ROLES[roleKey(u)]}</span></td><td>${u.status==='active'?'<span class="badge b-active"><span class="d"></span>Active</span>':u.status==='pending'?'<span class="badge b-pending"><span class="d"></span>Pending</span>':'<span class="badge b-rejected"><span class="d"></span>Disabled</span>'}</td><td class="cellsub">${fmtDate(u.createdAt)}</td><td style="text-align:right">${u.status==='pending'?`<button class="btn success xs" onclick="App.setUser('${u.id}','active')">Approve</button> <button class="btn ghost xs" onclick="App.setUser('${u.id}','disabled')">Decline</button>`:''}${!CLOUD&&u.status==='active'?`<button class="btn ghost xs" onclick="App.showPin('${u.id}')">${svg(IC.gear,11)} PIN</button> `:''}${u.status==='active'&&u.id!==this.me.id&&!u.locked?`<button class="btn ghost xs" onclick="App.openPerms('${u.id}')">Permissions</button> <button class="btn ghost xs" onclick="App.moduleAccessModal('${u.id}')">Modules</button> <button class="btn ghost xs" onclick="App.setUser('${u.id}','disabled')">Disable</button>`:''}${u.id===this.me.id?`<button class="btn ghost xs" onclick="App.moduleAccessModal('${u.id}')">My modules</button> <span class="cellsub">You</span>`:''}${u.locked&&u.id!==this.me.id?'<span class="cellsub">Protected</span>':''}${u.status==='disabled'?`<button class="btn ghost xs" onclick="App.setUser('${u.id}','active')">Re-enable</button>`:''}</td></tr>`;
+    const row=u=>`<tr><td><div class="who"><span class="avatar av">${initials(u.name)}</span><div><div class="nm">${esc(u.name)} ${u.locked?'<span class="badge b-primary" style="background:var(--primary-soft);color:var(--primary-deep);font-size:10px">Permanent admin</span>':''}</div><div class="cellsub">${esc(u.email)}</div></div></div></td><td><span class="badge b-draft" style="text-transform:none">${ROLES[roleKey(u)]}</span></td><td>${u.status==='active'?'<span class="badge b-active"><span class="d"></span>Active</span>':u.status==='pending'?'<span class="badge b-pending"><span class="d"></span>Pending</span>':'<span class="badge b-rejected"><span class="d"></span>Disabled</span>'}</td><td class="cellsub">${fmtDate(u.createdAt)}</td><td><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;align-items:center">${u.status==='pending'?`<button class="btn success xs" onclick="App.setUser('${u.id}','active')">Approve</button> <button class="btn ghost xs" onclick="App.setUser('${u.id}','disabled')">Decline</button>`:''}${!CLOUD&&u.status==='active'?`<button class="btn ghost xs" onclick="App.showPin('${u.id}')">${svg(IC.gear,11)} PIN</button> `:''}${u.status==='active'&&u.id!==this.me.id&&!u.locked?`<button class="btn ghost xs" onclick="App.openPerms('${u.id}')">Permissions</button> <button class="btn ghost xs" onclick="App.moduleAccessModal('${u.id}')">Modules</button> <button class="btn ghost xs" onclick="App.setUser('${u.id}','disabled')">Disable</button>`:''}${u.id===this.me.id?`<button class="btn ghost xs" onclick="App.moduleAccessModal('${u.id}')">My modules</button> <span class="cellsub">You</span>`:''}${u.locked&&u.id!==this.me.id?'<span class="cellsub">Protected</span>':''}${u.status==='disabled'?`<button class="btn ghost xs" onclick="App.setUser('${u.id}','active')">Re-enable</button>`:''}</td></tr>`;
     const plan=Object.entries(ROLES).map(([rk,rv])=>`<tr><td class="strong">${rv}</td>${ALL_PERMS.map(([pk])=>`<td style="text-align:center">${(ROLE_DEFAULTS[rk]||{})[pk]?'<span style="color:var(--success)">●</span>':'<span style="color:var(--line)">○</span>'}</td>`).join('')}</tr>`).join('');
     this.set(`
       ${pending.length?`<div class="notice" style="margin-bottom:16px">${svg(IC.people,16)}<div><b>${pending.length} account${pending.length>1?'s':''}</b> waiting for approval below.</div></div>`:''}
@@ -4974,7 +4998,7 @@ Object.assign(App,{
     if(!draft&&assignee){this.pushEvent(r,'Assigned to '+this.user(assignee).name,'assign');await this.notify(assignee,'New discovery request assigned',`${r.id} · ${brandName} — ${campName} — ${niche}. Due ${r.deadline?fmtDate(r.deadline):'soon'}.`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned: ${r.id} ${brandName}`,body:`You've been assigned ${r.id} (${brandName} · ${campName} — ${niche}).\nProfiles needed: ${r.qty}. Deadline: ${r.deadline?fmtDate(r.deadline):'TBD'}.\n\nThe requester will start discovery — the clock begins then.\n\n— ${this.me.name}`});}
     this.db.reqs.push(r);
     const c=this.camp(campId);if(c){c.reqIds=c.reqIds||[];if(!c.reqIds.includes(r.id))c.reqIds.push(r.id);await this.save('camps');}
-    if(this._enqId){const e=this.db.enq.find(x=>x.id===this._enqId);if(e){e.brandId=brandId;e.campaignId=campId;e.status=e.status==='new'?'qualified':e.status;await this.save('enq');}}
+    if(this._enqId){const e=this.db.enq.find(x=>x.id===this._enqId);if(e){e.brandId=brandId;e.campaignId=campId;e.convertedRequestId=r.id;e.status=['won','lost'].includes(e.status)?e.status:'proposal';await this.save('enq');}}
     await this.save('reqs');this.syncActsLocal();await this.save('acts');
     this.closeAll();this.toast(draft?'Saved as draft':`Request raised for ${campName} 🎯`,'ok');this.renderNav();this.go('requests');
     if(!draft)this.fireWebhook('request.raised',{id:r.id,brand:brandName,campaign:campName,niche,type,round:r.round,requester:this.me.name});
@@ -5023,7 +5047,7 @@ Object.assign(App,{
           ${rows.map((x,ri)=>{const known=this.resolveCreator(x.handle);return `<tr><td><div class="strong">${esc(x.name||('@'+x.handle))}</div><div class="cellsub">@${esc(x.handle)}</div></td><td class="mono">${nfmt(x.followers||0)}</td><td>${esc(x.engagement||'—')}</td><td style="white-space:normal;max-width:230px">${known?this.catsHTML(known,5):esc(x.categories||x.category||'—')}</td><td>${esc(x.city||'—')}</td><td class="cellsub">${esc(x._byName||'—')} · ${esc(x._src||'')}${x._reason?'<br>'+esc(x._reason):''}</td>${canFill?`<td style="text-align:right"><button class="xbtn" title="Remove from this round" onclick="App.roundRemove('${r.id}',${ri})">${svg(IC.x,12)}</button></td>`:''}</tr>`;}).join('')}
         </tbody></table></div>`:'<div class="cellsub" style="padding:6px 0">Nothing in this round yet.</div>'}
         ${(this.canRunDiscovery(r)||this.can('admin'))?`<div class="drop" id="dropZone" ondragover="event.preventDefault();this.classList.add('dragging')" ondragleave="this.classList.remove('dragging')" ondrop="event.preventDefault();this.classList.remove('dragging');App.handleSheet({target:{files:event.dataTransfer.files}},'${r.id}')" onclick="document.getElementById('sheetFile').click()" style="margin-top:12px"><div class="ic">${svg(IC.up,20)}</div><b>Drop a sheet to merge into round ${openRd.round}</b><small>.xlsx / .xls / .csv — merges, never overwrites</small></div><input type="file" id="sheetFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="App.handleSheet(event,'${r.id}')">
-        <div class="frow" style="margin-top:12px"><button class="btn success" onclick="App.submitRound('${r.id}')">${svg(IC.up,15)} Submit round ${openRd.round} for selection (${rows.length})</button>${this.can('export')?`<button class="btn ghost" onclick="App.exportRound('${r.id}',${r.rounds.indexOf(openRd)})">${svg(IC.down,14)} Download working sheet</button>`:''}</div>`:''}
+        <div class="frow" style="margin-top:12px"><button class="btn success" onclick="App.submitRound('${r.id}')">${svg(IC.up,15)} Submit round ${openRd.round} for selection (${rows.length})</button>${this.canExport()?`<button class="btn ghost" onclick="App.exportRound('${r.id}',${r.rounds.indexOf(openRd)})">${svg(IC.down,14)} Download working sheet</button>`:''}</div>`:''}
       </div>`;
     }
 
@@ -5114,11 +5138,11 @@ Object.assign(App,{
         </tbody></table></div>`:`<div class="revgrid" id="revgrid_${i}">${rd.rows.map((row,ri)=>this.reviewCard(r.id,i,row,ri,show)).join('')}</div>`}
         <div class="divide"></div><div id="revc_${i}" class="cellsub" style="margin-bottom:10px"></div>
         <div class="frow"><button class="btn success" onclick="App.finishReview('${r.id}',${i},'deliver')">${svg(IC.check,15)} Approve selected & push to sheets</button><button class="btn danger" onclick="App.finishReview('${r.id}',${i},'nextround')">${svg(IC.x,15)} Request round ${rd.round+1}</button></div>
-        ${this.can('export')?`<button class="btn ghost xs" style="margin-top:10px" onclick="App.exportRound('${r.id}',${i})">${svg(IC.down,13)} Download this sheet</button>`:''}
+        ${this.canExport()?`<button class="btn ghost xs" style="margin-top:10px" onclick="App.exportRound('${r.id}',${i})">${svg(IC.down,13)} Download this sheet</button>`:''}
       `:`
         <div class="revtable" style="margin:8px 0"><table class="tbl"><thead><tr>${rd.decisions?'<th>Result</th>':''}${show.map(c=>`<th>${esc(c)}</th>`).join('')}${rd.decisions?'<th>Reason</th>':''}</tr></thead><tbody>${rd.rows.map((row,ri)=>bodyRow(row,ri)).join('')}</tbody></table></div>
         ${st==='submitted'&&!canReview?`<div class="notice">${svg(IC.clock,14)}<div>Waiting on <b>${esc(this.user(r.requesterId)?.name||'the requester')}</b> to select.</div></div>`:''}
-        ${this.can('export')?`<button class="btn ghost xs" onclick="App.exportRound('${r.id}',${i})">${svg(IC.down,13)} Download this sheet</button>`:''}
+        ${this.canExport()?`<button class="btn ghost xs" onclick="App.exportRound('${r.id}',${i})">${svg(IC.down,13)} Download this sheet</button>`:''}
       `}
       </div></div>`;
   },
@@ -5324,21 +5348,23 @@ Object.assign(App,{
       <div class="frow"><div class="field"><label>Primary category</label><input class="inp" id="ro_c" value="${esc(r.category||'')}" placeholder="Fashion"></div><div class="field"><label>Brand types they fit</label><input class="inp" id="ro_btype" value="${esc((r.brandTypes||[]).join(', '))}" placeholder="D2C skincare, QSR, Fintech"></div></div>
       <div class="frow"><div class="field"><label>City</label><input class="inp" id="ro_city" value="${esc(r.city||'')}"></div><div class="field"><label>Email</label><input class="inp" id="ro_email" type="email" value="${esc(r.email||'')}" placeholder="creator@email.com"></div></div>
       <div class="frow"><div class="field"><label>Brand cost (₹)</label><input class="inp" id="ro_bc" type="number" value="${r.brandCost||''}"></div>${this.can('bridge')?`<div class="field"><label>Internal cost (₹)</label><input class="inp" id="ro_ic" type="number" value="${r.internalCost||''}"></div>`:''}</div></div>
-      <div class="mfoot">${id?`<button class="btn ghost" style="margin-right:auto;color:var(--danger)" onclick="App.delRoster('${id}')">Delete</button>`:''}<button class="btn ghost" onclick="App.closeAll()">Cancel</button><button class="btn primary" onclick="App.saveRoster('${id||''}')">Save</button></div>`);
+      <div class="mfoot">${id&&this.can('admin')?`<button class="btn ghost" style="margin-right:auto;color:var(--danger)" onclick="App.delRoster('${id}')">Delete</button>`:''}<button class="btn ghost" onclick="App.closeAll()">Cancel</button><button class="btn primary" onclick="App.saveRoster('${id||''}')">Save</button></div>`);
   },
   async saveRoster(id){
     const g=i=>(document.getElementById(i)||{value:''}).value.trim();
     const h=this.cnorm(g('ro_h'));if(!h)return this.toast('Handle required','err');
+    if(!id&&!this.canAddRoster())return this.toast('Only the Discovery Manager can add creators','err');
+    if(!id&&this.db.roster.some(x=>this.cnorm(x.handle)===h))return this.toast('A creator with this Instagram handle is already in the roster','err');
     const cats=g('ro_cats').split(',').map(s=>s.trim()).filter(Boolean).slice(0,5);
     const rec={handle:h,name:g('ro_n'),platform:g('ro_p'),followers:+g('ro_f')||0,eng:g('ro_e'),
       cats,category:g('ro_c')||cats[0]||'',brandTypes:g('ro_btype').split(',').map(s=>s.trim()).filter(Boolean),
       city:g('ro_city'),email:g('ro_email'),brandCost:+g('ro_bc')||0,
       internalCost:this.can('bridge')?(+g('ro_ic')||0):(id?(this.db.roster.find(x=>x.id===id)||{}).internalCost||0:0)};
     if(id){const ex=this.db.roster.find(x=>x.id===id);Object.assign(ex,rec);this.audit('creator.edit','creator:'+h,{handle:h,name:rec.name,field:'categories: '+cats.join(' · ')});}
-    else{this.db.roster.push({id:uid(),...rec,addedAt:now(),addedBy:this.me.id});this.audit('creator.add','creator:'+h,{handle:h,name:rec.name,source:'manual'});}
+    else{this.db.roster.push({id:uid(),...rec,addedAt:now(),addedBy:this.me.id});this.audit('creator.add','creator:'+h,{handle:h,name:rec.name,source:'manual'});this.logRosterSubmission(rec);}
     await this.save('roster');this.closeAll();this.toast('Saved','ok');this.vRoster();
   },
-  exportRoster(){this.export((this.db.roster||[]).map(r=>{const c=this.topCats(r);return {Handle:'@'+r.handle,Name:r.name,Platform:r.platform,Followers:r.followers,Engagement:r.eng,Category1:c[0]||'',Category2:c[1]||'',Category3:c[2]||'',Category4:c[3]||'',Category5:c[4]||'',BrandTypes:(r.brandTypes||[]).join('; '),City:r.city,BrandCost:r.brandCost,InternalCost:r.internalCost};}),'roster.xlsx');},
+  exportRoster(){if(!this.canExport())return this.toast('Only Admin can export, from the Roster module','err');this.export((this.db.roster||[]).map(r=>{const c=this.topCats(r);return {Handle:'@'+r.handle,Name:r.name,Platform:r.platform,Followers:r.followers,Engagement:r.eng,Category1:c[0]||'',Category2:c[1]||'',Category3:c[2]||'',Category4:c[3]||'',Category5:c[4]||'',BrandTypes:(r.brandTypes||[]).join('; '),City:r.city,BrandCost:r.brandCost,InternalCost:r.internalCost};}),'roster.xlsx');},
   rosterTemplate(){this.export([{handle:'creatorname',name:'Full Name',platform:'Instagram',followers:120000,engagement:'4.2%',category_1:'Fashion',category_2:'Lifestyle',category_3:'Travel',category_4:'Beauty',category_5:'Food',brand_types:'D2C skincare; QSR',city:'Mumbai',country:'India',language:'Hindi, English',price_type:'priced',reel_cost:60000,video_story:20000,store_visit:30000,brand_cost:90000,internal_cost:54000,email:'name@email.com',phone:'+91...'}],'roster_upload_template.xlsx');this.toast('Template downloaded — categories 1–5 are ranked, strongest first','ok');},
 
 });
