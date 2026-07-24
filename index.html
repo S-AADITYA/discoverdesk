@@ -2414,7 +2414,9 @@ const App={
 
   /* ================= DISCOVERY ================= */
   vDiscovery(){
-    const mine=this.db.reqs.filter(r=>r.assigneeId===this.me.id||(this.can('admin')&&r.assigneeId));
+    // A Discovery Manager sees requests ROUTED to them (to assign an employee),
+    // plus anything assigned to them; admin sees all assigned.
+    const mine=this.db.reqs.filter(r=>r.assigneeId===this.me.id||(this.roleKey()==='discovery_manager'&&(r.routedToManagerId===this.me.id||r.assigneeId))||(this.can('admin')&&r.assigneeId));
     let active=mine.filter(r=>['assigned','in_progress','rejected'].includes(r.status));
     const waiting=mine.filter(r=>r.status==='under_review'),done=mine.filter(r=>r.status==='approved');
     const df=this._dfilter||'all';
@@ -2592,7 +2594,7 @@ const App={
     }
     if(!parsed)parsed=this.parseQueryLocal(q);
     parsed=this.withFollowerRange(parsed);
-    const results=this.applyCreatorFilters(parsed);
+    const results=await this.applyCreatorFilters(parsed);
     this.renderSearchResults(q,parsed,results,!!useAi);
   },
   parseQueryLocal(q){ // transparent keyword parse — NOT AI, but honest & useful
@@ -2652,18 +2654,29 @@ const App={
       </div>
     </div>`;
   },
-  applyCreatorFilters(f){
-    let list=(this.db.roster||[]).slice();
+  async applyCreatorFilters(f){
+    let list;
+    if(CLOUD){
+      // Search the FULL roster in Postgres (roster_v), not just the local cache.
+      let query=SB.from('roster_v').select('id,data').limit(400);
+      if(f.city)query=query.ilike('data->>city','%'+f.city+'%');
+      if(f.niche)query=query.or(`data->>category.ilike.%${f.niche}%,niches.cs.{${f.niche}}`);
+      if(f.platform)query=query.ilike('data->>platform',f.platform);
+      if(f.gender)query=query.eq('data->>gender',f.gender);
+      if(f.priceType==='priced')query=query.eq('data->>priceType','priced');
+      const {data,error}=await query;
+      list=error?[]:(data||[]).map(row=>({...row.data,id:row.id}));
+      // Fallback to cache when the query is unfiltered/empty so results aren't blank.
+      if(!list.length && !f.city && !f.niche && !f.platform && !f.gender) list=(this.db.roster||[]).slice();
+    } else { list=(this.db.roster||[]).slice(); }
+    // numeric / score refinements applied on the fetched set
     if(f.followersMin)list=list.filter(r=>(+r.followers||0)>=f.followersMin);
     if(f.followersMax)list=list.filter(r=>(+r.followers||0)<=f.followersMax);
     if(f.budgetMax)list=list.filter(r=>{const c=+r.brandCost||+r.reelCost||0;return c&&c<=f.budgetMax;});
-    if(f.city)list=list.filter(r=>(r.city||'').toLowerCase().includes(f.city));
-    if(f.niche)list=list.filter(r=>(r.category||'').toLowerCase().includes(f.niche)||(r.niches||[]).some(n=>(''+n).toLowerCase().includes(f.niche)));
-    if(f.platform)list=list.filter(r=>(r.platform||'')===f.platform);
-    if(f.gender)list=list.filter(r=>(r.gender||'')===f.gender);
-    if(f.priceType)list=list.filter(r=>(r.priceType||this.priceOf?.(r))===f.priceType);
-    if(f.minAuth)list=list.filter(r=>this.creatorHealth(r).authenticity>=f.minAuth);
+    if(f.city&&!CLOUD)list=list.filter(r=>(r.city||'').toLowerCase().includes(f.city));
+    if(f.niche&&!CLOUD)list=list.filter(r=>(r.category||'').toLowerCase().includes(f.niche)||(r.niches||[]).some(n=>(''+n).toLowerCase().includes(f.niche)));
     if(f.tier)list=list.filter(r=>(this.tierOf?this.tierOf(r.followers):'').toLowerCase()===f.tier);
+    if(f.minAuth)list=list.filter(r=>this.creatorHealth(r).authenticity>=f.minAuth);
     return list.map(r=>({r,m:this.matchScore(r,this.matchBrief()),h:this.creatorHealth(r)})).sort((a,b)=>b.m.overall-a.m.overall).slice(0,50);
   },
   renderSearchResults(q,parsed,results,usedAi){
