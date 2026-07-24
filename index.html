@@ -1570,7 +1570,8 @@ const App={
     if(!r)return false;
     if(this.can('admin'))return true;
     const k=this.roleKey();
-    if(k==='discovery_manager')return true;                       // all requests
+    // A Discovery Manager sees ONLY the requests routed/assigned to THEM (not all).
+    if(k==='discovery_manager')return r.routedToManagerId===this.me.id||r.assigneeId===this.me.id||r.assignedById===this.me.id;
     if(k==='discovery_employee')return r.assigneeId===this.me.id; // assigned only
     // Request raisers (sales/KAM, employee AND manager) see ONLY their own (B-rule).
     if(k==='sales_employee'||k==='kam_employee'||k==='sales_manager'||k==='kam_manager')
@@ -2035,7 +2036,7 @@ const App={
         </div>
       </div>`);
   },
-  async setEnqStatus(id,s){const e=this.db.enq.find(x=>x.id===id);e.status=s;await this.save('enq');this.toast('Status updated','ok');this.renderNav();this.openEnq(id);},
+  async setEnqStatus(id,s){const e=this.db.enq.find(x=>x.id===id);if(!e)return;if(!this.can('admin')&&e.ownerId!==this.me.id)return this.toast('Only the owner (who raised it) or an admin can change this brand','err');e.status=s;await this.save('enq');this.toast('Status updated','ok');this.renderNav();this.openEnq(id);},
   async delEnq(id){if(!this.isPermAdmin())return this.toast('Only the permanent admin can delete','err');this.db.enq=this.db.enq.filter(x=>x.id!==id);await this.save('enq');this.closeAll();this.toast('Deleted','ok');this.renderNav();this.vEnquiries();},
   transferEnqModal(id){
     const kams=this.db.users.filter(u=>u.status==='active'&&deptOf(u)==='kam');
@@ -2046,7 +2047,7 @@ const App={
   },
   async transferEnqToKam(id){const e=this.db.enq.find(x=>x.id===id);if(!e)return;const uid2=document.getElementById('tk_user').value;const u=this.user(uid2);if(!u)return this.toast('Pick a KAM user','err');e.ownerId=uid2;await this.save('enq');this.closeAll();this.toast('Transferred to '+u.name,'ok');this.renderNav();this.vEnquiries();},
   emailEnq(id){const e=this.db.enq.find(x=>x.id===id);const url='mailto:'+encodeURIComponent(e.contact)+'?subject='+encodeURIComponent('Following up — '+e.service)+'&body='+encodeURIComponent('Hi,\n\nThanks for your interest in working with us on '+e.service+'. We\'d love to share some sample creator profiles.\n\nBest,\n'+this.me.name);window.open(url,'_blank');},
-  convertEnq(id){const e=this.db.enq.find(x=>x.id===id);this.closeAll();this.openNewReq({client:'new',brandName:e.client,niche:e.service,enqId:id});},
+  convertEnq(id){const e=this.db.enq.find(x=>x.id===id);if(!e)return;if(!this.can('admin')&&e.ownerId!==this.me.id)return this.toast('Only the owner (who raised it) or an admin can convert this brand','err');this.closeAll();this.openNewReq({client:'new',brandName:e.client,niche:e.service,enqId:id});},
   exportEnq(){this.export(this.db.enq.map(e=>({Client:e.client,Contact:e.contact,Service:e.service,Budget:e.budget,Source:e.source,Owner:this.user(e.ownerId)?.name,Status:e.status,Logged:fmtDate(e.createdAt),Notes:e.notes})),'enquiries.xlsx');},
 
   /* ================= REQUESTS ================= */
@@ -4840,10 +4841,9 @@ Object.assign(App,{
      unassigned request cannot be started at all. */
   canClock(r){
     if(!r)return false;
-    if(this.can('admin')||this.roleKey()==='discovery_manager')return true;
-    // The requester (Sales/KAM) starts the discovery clock once it's assigned;
-    // the assigned discovery employee can too.
-    return (!!r.assigneeId&&r.assigneeId===this.me.id)||r.requesterId===this.me.id;
+    if(this.can('admin'))return true;
+    // ONLY the Sales/KAM person who raised the request may START and CLOSE discovery.
+    return r.requesterId===this.me.id;
   },
   clockOwnerName(r){
     const a=r&&r.assigneeId&&this.user(r.assigneeId);
