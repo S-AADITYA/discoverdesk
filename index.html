@@ -1525,8 +1525,9 @@ const App={
     const r=this.req(id);if(!r)return;
     if(!(r.requesterId===this.me.id||r.assigneeId===this.me.id||r.routedToManagerId===this.me.id||this.can('admin')))return this.toast('Only people on this request can download it','err');
     const rows=[];const seen=new Set();
-    (r.suggestedCreators||[]).forEach(c=>{const k=(c.handle||c.name||'').toLowerCase();if(k&&!seen.has(k)){seen.add(k);rows.push({Handle:c.handle?('@'+c.handle):'',Name:c.name||'',Followers:c.followers||'',Category:c.category||'',City:c.city||'',Source:'Sales-suggested'});}});
-    (r.rounds||[]).forEach(rd=>(rd.rows||[]).forEach(c=>{const k=(c.handle||c.name||'').toLowerCase();if(k&&!seen.has(k)){seen.add(k);rows.push({Handle:c.handle?('@'+c.handle):'',Name:c.name||'',Followers:c.followers||'',Engagement:c.engagement||'',Category:c.category||'',City:c.city||'',Cost:c.cost||'',Round:rd.round});}});});
+    const add=(c,extra)=>{const k=(c.handle||c.name||'').toLowerCase();if(!k||seen.has(k))return;seen.add(k);rows.push(Object.assign({Handle:c.handle?('@'+c.handle):'',Name:c.name||'',Followers:c.followers||'',Category:c.category||'',City:c.city||''},extra||{}));};
+    (r.suggestedCreators||[]).forEach(c=>add(c,{Source:'Sales-suggested'}));
+    (r.rounds||[]).forEach(rd=>{(rd.rows||[]).forEach(c=>add(c,{Engagement:c.engagement||'',Cost:c.cost||'',Round:rd.round}));});
     if(!rows.length)return this.toast('No creators in this request yet','err');
     this.exportRaw(rows,(r.id||'request')+'-'+(r.brandName||'creators').replace(/[^a-z0-9]+/gi,'_')+'.xlsx');
   },
