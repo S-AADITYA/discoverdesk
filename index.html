@@ -1071,8 +1071,11 @@ const App={
     for(const k of keys){
       // If load() had to fall back to kv for a dataset (table not created
       // yet), keep writing it to kv so nothing is silently dropped.
-      if(k==='reqs'   && CLOUD && !fb.reqs){   await this.saveReqsCloud();   continue; }
-      if(k==='enq'    && CLOUD && !fb.enq){    await this.saveEnqCloud();    continue; }
+      // Requests/enquiries ALWAYS persist to the cloud (their tables exist). A
+      // transient load hiccup must NOT trap saves in local-only mode, or raised
+      // requests vanish on the next refresh.
+      if(k==='reqs'   && CLOUD){   await this.saveReqsCloud();   continue; }
+      if(k==='enq'    && CLOUD){    await this.saveEnqCloud();    continue; }
       if(k==='roster' && CLOUD && !fb.roster){ await this.saveRosterCloud(); continue; }
       if(k==='infl'   && CLOUD && !fb.infl){   await this.saveInflCloud();   continue; }
       await store.set(map[k],this.db[k]);
