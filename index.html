@@ -1522,6 +1522,21 @@ const App={
   staleFlag(r){if(!r||!r.verifiedAt)return '';const days=(now()-r.verifiedAt)/864e5;return days>90?'<span class="badge b-rejected" style="font-size:9px">⚑ stale</span>':'';},
   verifyState(r){if(!r||!r.verifiedAt)return 'unverified';return ((now()-r.verifiedAt)/864e5>90)?'stale':'verified';},
   async verifyCreator(id){const r=this.db.roster.find(x=>x.id===id);if(!r)return;r.verified=true;r.verifiedAt=now();r.verifiedBy=this.me.id;this.audit('creator.verify','creator:'+r.handle,{handle:r.handle,name:r.name});await this.saveRosterRow(r);this.toast('Marked as verified','ok');this.closeAll();this.vRoster();},
+  // Pull LIVE subs/views/avatar from YouTube for one creator; the endpoint writes
+  // the row server-side (service key), so it works for search results too.
+  async refreshYouTube(id,handle){
+    if(!CLOUD)return this.toast('Live YouTube pull needs the deployed app','err');
+    this.toast('Fetching live from YouTube…','ok');
+    try{
+      const resp=await fetch(API('/api/youtube'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({handle:handle,rosterId:id})});
+      const d=await resp.json();
+      if(!d.ok||!d.channel)return this.toast('YouTube: '+(d.error||'channel not found'),'err');
+      const ch=d.channel;const r=this.db.roster&&this.db.roster.find(x=>x.id===id);
+      if(r){r.followers=ch.followers||r.followers;r.avgViews=ch.avgViews||r.avgViews;r.ytChannelId=ch.channelId;r.ytVideoCount=ch.videoCount;r.ytTotalViews=ch.totalViews;if(ch.country)r.country=ch.country;r.lastSynced=now();}
+      this.toast('Updated @'+handle+' — '+nfmt(ch.followers)+' subscribers','ok');
+      if(this.view==='roster')this.vRoster();
+    }catch(e){this.toast('YouTube fetch failed','err');}
+  },
   // When Discovery adds a creator it lands in the roster AND is appended to a
   // separate submissions log (who added what, when) in stored data.
   async logRosterSubmission(rec){if(!SB||!rec)return;try{await SB.from('roster_submissions').insert({
@@ -3550,7 +3565,7 @@ const App={
       <div class="chips"><span class="tag">${esc(r.category||'Other')}</span><span class="tag">${tier}</span>${r.city?`<span class="tag">\ud83d\udccd ${esc(r.city)}</span>`:''}${(()=>{const st=this.verifyState(r);return st==='verified'?`<span class="tag" title="Verified ${r.verifiedAt?fmtDate(r.verifiedAt):''}" style="color:var(--success);border-color:var(--success)">\u2713 Verified</span>`:`<span class="tag" title="${st==='stale'?'Verification is over 90 days old':'Never verified'}" style="color:var(--danger);border-color:var(--danger)">\u2691 ${st==='stale'?'Recheck':'Unverified'}</span>`;})()}${r.duplicate?`<span class="tag" title="Same Instagram handle appears in ${r.dupeCount||2} sub-sheets \u2014 merged into one record" style="color:#e0900a;border-color:#e0900a">\u29c9 Duplicate</span>`:''}</div>
       <div class="mgrid"><div class="mbox"><div class="l">Followers</div><div class="v">${nfmt(+r.followers||0)}</div></div><div class="mbox"><div class="l">Avg views</div><div class="v">${r.avgViews?nfmt(+r.avgViews):'\u2014'}</div></div></div>
       <div class="pgrid"><div class="pbox ${r.reelCost?'hl':''}"><div class="l">Reel</div><div class="v">${r.reelCost?'\u20b9'+nfmt(r.reelCost):'\u2014'}</div></div><div class="pbox"><div class="l">Video story</div><div class="v">${r.videoStory?'\u20b9'+nfmt(r.videoStory):'\u2014'}</div></div><div class="pbox"><div class="l">Store visit</div><div class="v">${r.storeVisit?'\u20b9'+nfmt(r.storeVisit):'\u2014'}</div></div></div>
-      <div class="foot" onclick="event.stopPropagation()"><span class="by">Added by ${esc(this.user(r.addedBy)?.name||'\u2014')}</span><div style="display:flex;gap:6px"><span class="icobtn" title="View dashboard" onclick="App.rosterDashboard('${r.id}')">${svg(IC.report,14)}</span><span class="icobtn" title="Edit" onclick="App.editRoster('${r.id}')">${svg(IC.gear,13)}</span><span class="icobtn dg" title="Delete" onclick="App.delRosterDup('${r.id}')">${svg(IC.x,13)}</span></div></div>
+      <div class="foot" onclick="event.stopPropagation()"><span class="by">Added by ${esc(this.user(r.addedBy)?.name||'\u2014')}</span><div style="display:flex;gap:6px">${(r.platform||'').toLowerCase()==='youtube'?`<span class="icobtn" title="Refresh live from YouTube" onclick="event.stopPropagation();App.refreshYouTube('${r.id}','${esc((r.handle||'').replace(/'/g,''))}')">${svg(IC.refresh,13)}</span>`:''}<span class="icobtn" title="View dashboard" onclick="App.rosterDashboard('${r.id}')">${svg(IC.report,14)}</span><span class="icobtn" title="Edit" onclick="App.editRoster('${r.id}')">${svg(IC.gear,13)}</span><span class="icobtn dg" title="Delete" onclick="App.delRosterDup('${r.id}')">${svg(IC.x,13)}</span></div></div>
     </div>`;
   },
   rosterMis(){
