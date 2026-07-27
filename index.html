@@ -694,6 +694,39 @@ body.dark .ptype.barter{background:#3a2410}
 .roundws{border:1px dashed rgba(88,71,235,.35);background:linear-gradient(180deg,rgba(88,71,235,.04),transparent)}
 .cmp-chip.rich{align-items:flex-start;text-align:left}
 .cmp-chip.rich .cats{display:block;margin-top:3px}
+
+/* ===== UI polish (2026-07-27): classier login, click feedback, hover depth ===== */
+/* Click feedback — universal press, cheap and always on */
+.btn,.iconbtn,.chip,.ccard,.cmp-chip,.slcard{transition:transform .12s cubic-bezier(.22,.7,.3,1),box-shadow .18s,border-color .15s}
+.btn:active,.iconbtn:active,.chip:active,.ccard:active,.cmp-chip:active{transform:scale(.96)}
+/* Input focus — soft glow ring */
+.inp:focus,.inp:focus-visible{border-color:var(--primary);outline:none;box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 22%,transparent)}
+@media (prefers-reduced-motion:no-preference){
+  /* Login — panel glides in; card contents stagger up */
+  .auth-panel{animation:polishIn .6s cubic-bezier(.22,.7,.3,1) both}
+  .auth-card>*{animation:authStag .5s cubic-bezier(.22,.7,.3,1) both}
+  .auth-card>h2{animation-delay:.04s}
+  .auth-card>.sub,.auth-card>#authErr{animation-delay:.09s}
+  .auth-card>.field,.auth-card>.frow{animation-delay:.15s}
+  .auth-card>.btn{animation-delay:.23s}
+  .auth-card>.auth-alt,.auth-card>.hint,.auth-card>.divide{animation-delay:.29s}
+  @keyframes polishIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+  @keyframes authStag{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+  /* Primary buttons — a soft light sheen sweeps on hover */
+  .btn.primary{position:relative;overflow:hidden}
+  .btn.primary::after{content:"";position:absolute;top:0;left:-125%;width:55%;height:100%;pointer-events:none;background:linear-gradient(100deg,transparent,rgba(255,255,255,.38),transparent);transform:skewX(-18deg)}
+  .btn.primary:hover::after{animation:sheen .7s ease}
+  @keyframes sheen{from{left:-125%}to{left:160%}}
+  /* Interactive cards lift on hover */
+  .ccard,.slcard,.cmp-chip{transition:transform .18s cubic-bezier(.22,.7,.3,1),box-shadow .18s,border-color .15s}
+  .ccard:hover,.slcard:hover,.cmp-chip:hover{transform:translateY(-3px)}
+  /* Creator profile / modals — gentle pop */
+  .modal.on{animation:modalPop .28s cubic-bezier(.22,1.15,.36,1)}
+  @keyframes modalPop{from{opacity:0;transform:translate(-50%,-50%) scale(.955)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+  /* Nav — hover nudge */
+  .nav a{transition:transform .15s ease,background .15s ease,color .15s ease}
+  .nav a:hover{transform:translateX(3px)}
+}
 </style>
 
 
@@ -1627,7 +1660,7 @@ const App={
   effPerms(u){const base=ROLE_DEFAULTS[u.role]||{};const out={};ALL_PERMS.forEach(([k])=>{out[k]=u.perms&&u.perms[k]!==undefined&&u.perms[k]!==null?!!u.perms[k]:!!base[k];});return out;},
 
   modVisible(u,id,def){if(u&&u.mods&&Object.prototype.hasOwnProperty.call(u.mods,id))return !!u.mods[id];return !!def;},
-  modDefault(u,id){const p=this.effPerms(u);const map={dashboard:1,requests:1,board:1,campaigns:1,exec:1,reports:1,activity:1,inbox:1,team:1,influencers:1,discovery:p.discover,review:p.review,enquiries:p.enquiries,roster:p.roster,bridge:p.bridge,clientview:p.clientview,creators:p.influencers||p.review||p.discover,integrations:p.integrations,mission:1,dsearch:(p.roster||p.discover||p.review||p.influencers),pool:(p.discover||p.review||p.roster||p.influencers),shortlist:(p.review||p.discover||p.influencers),compare:1,calendar:(p.raise||p.discover||p.review||p.influencers)};return !!map[id];},
+  modDefault(u,id){const p=this.effPerms(u);const map={dashboard:1,requests:1,board:1,campaigns:1,exec:1,reports:1,activity:1,inbox:1,team:1,influencers:1,discovery:p.discover,review:p.review,enquiries:p.enquiries,roster:p.roster,bridge:p.bridge,clientview:p.clientview,creators:p.influencers||p.review||p.discover,integrations:p.integrations,mission:1,dsearch:(p.roster||p.discover||p.review||p.influencers),pool:(p.discover||p.review||p.roster||p.influencers),shortlist:0,compare:1,calendar:(p.raise||p.discover||p.review||p.influencers)};return !!map[id];},
   renderNav(){
     const pending=this.db.users.filter(u=>u.status==='pending').length;
     const myQ=this.db.reqs.filter(r=>r.assigneeId===this.me.id&&['assigned','in_progress','rejected'].includes(r.status)).length;
@@ -2041,22 +2074,27 @@ const App={
   openNewEnq(){
     this.modal(`<div class="mhead"><div><h3>Register brand</h3><p>Capture new business coming into Sales / KAM</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div>
       <div class="mbody">
-        <div class="frow"><div class="field"><label>Client / brand name</label><input class="inp" id="e_client"></div><div class="field"><label>Contact (email / person)</label><input class="inp" id="e_contact"></div></div>
+        <div class="frow"><div class="field"><label>Client / brand name <span style="color:var(--danger)">*</span></label><input class="inp" id="e_client"></div><div class="field"><label>Brand website <span style="color:var(--danger)">*</span></label><input class="inp" id="e_website" placeholder="https://brand.com"></div></div>
+        <div class="field"><label>Contact (email / person)</label><input class="inp" id="e_contact"></div>
         <div class="frow three"><div class="field"><label>Service</label><input class="inp" id="e_service" value="Influencer campaign"></div><div class="field"><label>Budget</label><input class="inp" id="e_budget" placeholder="₹2–4L"></div><div class="field"><label>Source</label><select class="inp" id="e_source"><option>Inbound</option><option>Referral</option><option>Outbound</option><option>Event</option></select></div></div>
         <div class="field"><label>Status</label><select class="inp" id="e_status"><option value="new">New</option><option value="qualified">Qualified</option><option value="proposal">Proposal</option><option value="won">Won</option><option value="lost">Lost</option></select></div>
         <div class="field"><label>Notes</label><textarea class="inp" id="e_notes"></textarea></div>
       </div><div class="mfoot"><button class="btn ghost" onclick="App.closeAll()">Cancel</button><button class="btn primary" onclick="App.saveEnq()">Save enquiry</button></div>`);
   },
+  // Normalize a brand website: prepend https:// if missing, return the URL, or null if not a plausible domain.
+  _website(raw){let v=(raw||'').trim();if(!v)return null;if(!/^https?:\/\//i.test(v))v='https://'+v;return /^https?:\/\/[^\s.]+\.[^\s]{2,}/i.test(v)?v:null;},
   async saveEnq(){
     const client=document.getElementById('e_client').value.trim();if(!client)return this.toast('Client name required','err');
-    this.db.enq.push({id:uid(),client,contact:document.getElementById('e_contact').value.trim(),service:document.getElementById('e_service').value.trim(),budget:document.getElementById('e_budget').value.trim(),source:document.getElementById('e_source').value,status:document.getElementById('e_status').value,notes:document.getElementById('e_notes').value.trim(),ownerId:this.me.id,createdAt:now(),brandId:null});
+    const wraw=(document.getElementById('e_website').value||'').trim();if(!wraw)return this.toast('Brand website is required','err');
+    const website=this._website(wraw);if(!website)return this.toast('Enter a valid brand website (e.g. brand.com)','err');
+    this.db.enq.push({id:uid(),client,website,contact:document.getElementById('e_contact').value.trim(),service:document.getElementById('e_service').value.trim(),budget:document.getElementById('e_budget').value.trim(),source:document.getElementById('e_source').value,status:document.getElementById('e_status').value,notes:document.getElementById('e_notes').value.trim(),ownerId:this.me.id,createdAt:now(),brandId:null});
     await this.save('enq');this.closeAll();this.toast('Enquiry logged','ok');this.renderNav();this.vEnquiries();
   },
   openEnq(id){
     const e=this.db.enq.find(x=>x.id===id);
     this.drawer(`<div class="dt-top"><div style="display:flex;justify-content:space-between"><div class="dt-meta"><span class="badge b-new" style="text-transform:capitalize">${e.status}</span><span class="cellsub">${fmtDate(e.createdAt)}</span></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div><div class="dt-title">${esc(e.client)}</div><div class="dt-sub">${esc(e.service)} · ${esc(e.budget||'budget TBD')}</div></div>
       <div class="mbody">
-        <div class="specgrid"><div class="s"><div class="k">Campaign</div><div class="v">${esc(e.campaign||'—')}</div></div><div class="s"><div class="k">Owner</div><div class="v">${this.user(e.ownerId)?.name||'—'}</div></div>${e.subOwnerId?`<div class="s"><div class="k">KAM sub-owner</div><div class="v">${esc(this.user(e.subOwnerId)?.name||'—')}</div></div>`:''}<div class="s"><div class="k">Source</div><div class="v">${esc(e.source||'—')}</div></div><div class="s"><div class="k">Contact</div><div class="v">${esc(e.contact||'—')}</div></div><div class="s"><div class="k">Status</div><div class="v" style="text-transform:capitalize">${e.status}</div></div></div>
+        <div class="specgrid"><div class="s"><div class="k">Campaign</div><div class="v">${esc(e.campaign||'—')}</div></div>${e.website?`<div class="s"><div class="k">Website</div><div class="v"><a href="${esc(e.website)}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:600;text-decoration:none">${esc(e.website.replace(/^https?:\/\//,''))} ↗</a></div></div>`:''}<div class="s"><div class="k">Owner</div><div class="v">${this.user(e.ownerId)?.name||'—'}</div></div>${e.subOwnerId?`<div class="s"><div class="k">KAM sub-owner</div><div class="v">${esc(this.user(e.subOwnerId)?.name||'—')}</div></div>`:''}<div class="s"><div class="k">Source</div><div class="v">${esc(e.source||'—')}</div></div><div class="s"><div class="k">Contact</div><div class="v">${esc(e.contact||'—')}</div></div><div class="s"><div class="k">Status</div><div class="v" style="text-transform:capitalize">${e.status}</div></div></div>
         ${e.notes?`<div class="notice">${svg(IC.bolt,16)}<div>${esc(e.notes)}</div></div>`:''}
         <div class="sec-t">Update status</div>
         <select class="inp" onchange="App.setEnqStatus('${e.id}',this.value)">${['new','qualified','proposal','won','lost'].map(s=>`<option value="${s}" ${e.status===s?'selected':''} style="text-transform:capitalize">${s}</option>`).join('')}</select>
@@ -3759,8 +3797,13 @@ const App={
     </div>`;
   },
   
-  rosterDashboard(id){
-    const r=(this.db.roster||[]).find(x=>x.id===id);if(!r)return this.toast('Not found','err');
+  async rosterDashboard(id){
+    let r=(this.db.roster||[]).find(x=>x.id===id);
+    // Cache is capped (3k) and sheet-filtered, but Discovery Search / roster browse can
+    // surface creators that aren't cached. Fetch that single row from roster_v by id so
+    // clicking ANY creator reliably opens its profile.
+    if(!r&&CLOUD){try{const{data}=await SB.from('roster_v').select('*').eq('id',id).limit(1);const row=data&&data[0];if(row)r={...row.data,...(row.contact||{}),id:row.id,_cmask:!row.contact_visible};}catch(e){}}
+    if(!r)return this.toast('Not found','err');
     const idx=this.creatorIndex();const ci=idx[this.cnorm(r.handle)]||{appearances:[],brandCount:0,selected:0,rejected:0,dropRate:0};
     const sc=this.scores(r);const metaOn=(this._settings&&this._settings.meta&&this._settings.meta.token);
     const pt=this.priceOf(r);const ptl={priced:'With price',barter:'Barter',none:'No price'}[pt];const tier=this.tierOf(r.followers);
@@ -5147,7 +5190,7 @@ Object.assign(App,{
   },
   convertEnq(id){
     const e=this.db.enq.find(x=>x.id===id);this.closeAll();
-    this.openNewReq({client:'new',brandName:e.client,niche:e.service,enqId:id,campaignName:e.campaign||''});
+    this.openNewReq({client:'new',brandName:e.client,niche:e.service,enqId:id,campaignName:e.campaign||'',brandWebsite:e.website||''});
   },
   exportEnq(){this.export(this.db.enq.map(e=>({Client:e.client,Campaign:e.campaign||'',Contact:e.contact,Service:e.service,Budget:e.budget,Source:e.source,Owner:this.user(e.ownerId)?.name,Status:e.status,Logged:fmtDate(e.createdAt),Notes:e.notes})),'enquiries.xlsx');},
 
@@ -5163,6 +5206,7 @@ Object.assign(App,{
           <div class="field"><label>Campaign name <span style="color:var(--danger)">*</span> <span class="cellsub">(one campaign · many selection rounds)</span></label>
             <select class="inp" id="nq_camp" onchange="App.onCampPick()"><option value="">— select campaign —</option><option value="__new">+ New campaign…</option></select>
             <input class="inp" id="nq_newcampname" placeholder="New campaign name" style="display:${pre.campaignName?'block':'none'};margin-top:8px" value="${esc(pre.campaignName||'')}"></div></div>
+        <div class="field"><label>Brand website <span style="color:var(--danger)">*</span> <span class="cellsub">(auto-fills for existing brands)</span></label><input class="inp" id="nq_website" placeholder="https://brand.com" value="${esc(pre.brandWebsite||'')}"></div>
         <div class="frow three"><div class="field"><label>Request type</label><select class="inp" id="nq_type" onchange="App.onTypeChange()"><option value="campaign">Campaign profiles</option><option value="sample" ${pre.client==='new'?'selected':''}>Sample profiles (pitch)</option></select></div>
           <div class="field" id="roundField"><label>Sample round</label><select class="inp" id="nq_round"><option value="1">Sample round 1</option><option value="2">Sample round 2</option><option value="3">Sample round 3</option><option value="4">Sample round 4+</option></select></div>
           <div class="field"><label>Profiles needed</label><input class="inp" id="nq_qty" type="number" min="1" value="12"></div></div>
@@ -5195,6 +5239,9 @@ Object.assign(App,{
   onBrandPick(){
     const v=document.getElementById('nq_brand').value;
     document.getElementById('nq_newbrand').style.display=v==='__new'?'block':'none';
+    // Auto-fill the (mandatory) website when an existing brand is chosen; clear it for a brand-new one.
+    const wf=document.getElementById('nq_website');
+    if(wf){const b=this.db.brands.find(x=>x.id===v);wf.value=b&&b.website?b.website:(v==='__new'?'':wf.value);}
     const cs=this.db.camps.filter(c=>c.brandId===v);
     document.getElementById('nq_camp').innerHTML='<option value="">— select campaign —</option>'+cs.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join('')+'<option value="__new">+ New campaign…</option>';
     this.onCampPick();
@@ -5221,9 +5268,12 @@ Object.assign(App,{
   },
   async submitReq(draft){
     const bsel=document.getElementById('nq_brand').value,niche=document.getElementById('nq_niche').value.trim();
+    // Brand website is mandatory on every request (new or existing brand).
+    const wraw=(document.getElementById('nq_website').value||'').trim();if(!wraw)return this.toast('Brand website is required','err');
+    const website=this._website(wraw);if(!website)return this.toast('Enter a valid brand website (e.g. brand.com)','err');
     let brandId=bsel,brandName='';
-    if(bsel==='__new'){const nm=document.getElementById('nq_newbrand').value.trim();if(!nm)return this.toast('Enter the brand name','err');const _dupB=this.findBrandByName(nm);if(_dupB)return this.toast('Brand already exists — "'+_dupB.name+'" is already on the list. Pick it instead of creating a duplicate.','err');const nb={id:uid(),name:nm,industry:'—',status:this._client==='new'?'prospect':'execution',contact:'',email:'',createdAt:now(),createdBy:this.me.id};this.db.brands.push(nb);await this.save('brands');brandId=nb.id;brandName=nm;}
-    else if(bsel){brandName=this.brand(bsel).name;}else return this.toast('Select or add a brand','err');
+    if(bsel==='__new'){const nm=document.getElementById('nq_newbrand').value.trim();if(!nm)return this.toast('Enter the brand name','err');const _dupB=this.findBrandByName(nm);if(_dupB)return this.toast('Brand already exists — "'+_dupB.name+'" is already on the list. Pick it instead of creating a duplicate.','err');const nb={id:uid(),name:nm,website,industry:'—',status:this._client==='new'?'prospect':'execution',contact:'',email:'',createdAt:now(),createdBy:this.me.id};this.db.brands.push(nb);await this.save('brands');brandId=nb.id;brandName=nm;}
+    else if(bsel){const bb=this.brand(bsel);brandName=bb.name;if(bb.website!==website){bb.website=website;await this.save('brands');}}else return this.toast('Select or add a brand','err');
     if(!niche)return this.toast('Niche is required','err');
     let campId=document.getElementById('nq_camp').value,campName='';
     if(!campId)return this.toast('Campaign name is mandatory — every request belongs to a named campaign.','err');
@@ -5238,7 +5288,7 @@ Object.assign(App,{
     // Sales/KAM (no 'assign' perm) MUST route to a Discovery Manager (hop 1); managers/admin assign a Discovery Employee directly.
     const isRaiser=!this.can('assign');
     if(isRaiser&&!draft&&!assignee)return this.toast('Assign a Discovery Manager to raise this request','err');
-    const r={id:await this.nextSeq('REQ'),seq:this.db.reqs.length+1,brandId,brandName,campaignId:campId,campaignName:campName,client:this._client,reqType:type,
+    const r={id:await this.nextSeq('REQ'),seq:this.db.reqs.length+1,brandId,brandName,brandWebsite:website,campaignId:campId,campaignName:campName,client:this._client,reqType:type,
       round:type==='sample'?1:+document.getElementById('nq_round').value,
       sampleRound:+document.getElementById('nq_round').value||1,
       brandType:(document.getElementById('nq_btype')||{}).value||'',
@@ -5325,7 +5375,7 @@ Object.assign(App,{
       <div class="actbar" style="margin-top:10px">${['low','med','high'].map(p=>`<button class="btn ${r.priority===p||(!r.priority&&p==='med')?'primary':'ghost'} xs" onclick="App.setPriority('${r.id}','${p}')">${p[0].toUpperCase()+p.slice(1)}</button>`).join('')}<span class="cellsub" style="align-self:center;margin-left:4px">priority</span></div></div>
       <div class="mbody">${pipe}
         ${ctrl}
-        <div class="specgrid">${spec('Campaign',esc(campNm||'—'))}${spec('Requested by',this.user(r.requesterId)?.name||'—')}${spec('Assigned to',r.assigneeId?this.user(r.assigneeId).name:'<span class="unassigned">Unassigned</span>')}${spec('Selection rounds',r.rounds.length||0)}${spec('Followers',nfmt(r.fMin)+' – '+nfmt(r.fMax))}${spec('Creator type',esc(r.pType||'—'))}${spec('Platform',esc(r.platform||'—'))}${spec('Profiles needed',r.qty||'—')}${spec('Deadline',this.deadlineCell(r)+' '+this.slaChip(r))}${spec('Time in stage',this.agoStr(this.stageSince(r)))}${spec('Turnaround',tat!=null?fmtDur(tat):'in progress')}${r.brandBudget?spec('Brand budget',`₹${nfmt(r.brandBudget)}`):''}${(this.can('bridge')&&r.internalCost)?spec('Internal cost',`₹${nfmt(r.internalCost)}`):''}${(this.can('bridge')&&r.brandBudget&&r.internalCost)?spec('Est. margin',`<span style="color:${r.brandBudget-r.internalCost>=0?'var(--success)':'var(--danger)'}">₹${nfmt(r.brandBudget-r.internalCost)} (${Math.round((r.brandBudget-r.internalCost)/r.brandBudget*100)}%)</span>`):''}${r.sample?spec('Sample ref',esc(r.sample)):''}</div>
+        <div class="specgrid">${spec('Campaign',esc(campNm||'—'))}${(r.brandWebsite||(this.brand(r.brandId)||{}).website)?spec('Website',(()=>{const w=r.brandWebsite||this.brand(r.brandId).website;return `<a href="${esc(w)}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:600;text-decoration:none">${esc(w.replace(/^https?:\/\//,''))} ↗</a>`;})()):''}${spec('Requested by',this.user(r.requesterId)?.name||'—')}${spec('Assigned to',r.assigneeId?this.user(r.assigneeId).name:'<span class="unassigned">Unassigned</span>')}${spec('Selection rounds',r.rounds.length||0)}${spec('Followers',nfmt(r.fMin)+' – '+nfmt(r.fMax))}${spec('Creator type',esc(r.pType||'—'))}${spec('Platform',esc(r.platform||'—'))}${spec('Profiles needed',r.qty||'—')}${spec('Deadline',this.deadlineCell(r)+' '+this.slaChip(r))}${spec('Time in stage',this.agoStr(this.stageSince(r)))}${spec('Turnaround',tat!=null?fmtDur(tat):'in progress')}${r.brandBudget?spec('Brand budget',`₹${nfmt(r.brandBudget)}`):''}${(this.can('bridge')&&r.internalCost)?spec('Internal cost',`₹${nfmt(r.internalCost)}`):''}${(this.can('bridge')&&r.brandBudget&&r.internalCost)?spec('Est. margin',`<span style="color:${r.brandBudget-r.internalCost>=0?'var(--success)':'var(--danger)'}">₹${nfmt(r.brandBudget-r.internalCost)} (${Math.round((r.brandBudget-r.internalCost)/r.brandBudget*100)}%)</span>`):''}${r.sample?spec('Sample ref',esc(r.sample)):''}</div>
         ${r.notes?`<div class="notice">${svg(IC.bolt,16)}<div>${esc(r.notes)}</div></div>`:''}
         ${(r.suggestedCreators&&r.suggestedCreators.length)?`<div class="sec-t">Client-requested creators <span class="cellsub">(${r.suggestedCreators.length})</span></div><div class="card pad" style="margin-bottom:14px;background:var(--surface-2)"><div class="cellsub" style="margin-bottom:8px">Pre-picked by ${esc(this.user(r.requesterId)?.name||'Sales/KAM')}.${openRd?' <b>Push them into the open round →</b>':''}</div>${r.suggestedCreators.map(sc=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line-2)"><div><b style="font-size:13px">${esc(sc.name||('@'+sc.handle))}</b> <span class="cellsub">${nfmt(sc.followers||0)} · ${esc(sc.cats||sc.category||'—')}</span></div><div style="display:flex;gap:6px;align-items:center"><span class="cellsub">${esc(sc.reason||'')} · ${esc(sc.addedByName||'—')}</span>${(openRd&&this.canFillRound(r))?`<button class="btn ghost xs" onclick="App.roundAdd('${r.id}','${esc(sc.handle)}','client-requested','Client requested').then(()=>App.openReq('${r.id}'))">→ Round ${openRd.round}</button>`:''}</div></div>`).join('')}</div>`:''}
         ${!r.assigneeId&&r.status!=='draft'&&(this.can('assign')||(r.requesterId===this.me.id&&!r.routedToManagerId))?(()=>{const tgt=this.assignTargets();return tgt.length?`<div class="sec-t">Assign discovery</div><div class="cellsub" style="margin:-4px 0 8px">${this.assignHint()}</div><div style="display:flex;gap:8px"><select class="mini-select" id="assignSel" style="flex:1">${tgt.map(u=>`<option value="${u.id}">${esc(u.name)} · ${ROLES[roleKey(u)]}</option>`).join('')}</select><button class="btn primary sm" onclick="App.assignReq('${r.id}')">Assign</button></div>`:`<div class="sec-t">Assign discovery</div><div class="notice" style="font-size:12px">${svg(IC.bolt,13)}<div>No eligible people to assign to yet.</div></div>`;})():''}
