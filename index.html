@@ -1516,7 +1516,20 @@ const App={
   },
   can(perm){const u=this.me;if(u.perms&&u.perms[perm]!==undefined&&u.perms[perm]!==null)return !!u.perms[perm];return !!(ROLE_DEFAULTS[roleKey(u)]||{})[perm];},
   // Export/download is Admin-only AND only inside the Roster module (B-rule).
-  canExport(){return this.can('export')&&this.view==='roster';},
+  canExport(){return this.isPermAdmin()||(this.can('export')&&this.view==='roster');},
+  // Raw download (no roster-export gate) — used for per-request creator sheets
+  // that Sales/KAM are allowed to download for their own request.
+  exportRaw(rows,filename){if(!rows||!rows.length)return this.toast('Nothing to export','err');try{const ws=XLSX.utils.json_to_sheet(rows);const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,'Creators');XLSX.writeFile(wb,filename);this.toast('Downloaded '+filename,'ok');}catch(e){this.toast('Export failed','err');}},
+  // Download the creators that belong to THIS request (suggested + all rounds).
+  downloadReqCreators(id){
+    const r=this.req(id);if(!r)return;
+    if(!(r.requesterId===this.me.id||r.assigneeId===this.me.id||r.routedToManagerId===this.me.id||this.can('admin')))return this.toast('Only people on this request can download it','err');
+    const rows=[];const seen=new Set();
+    (r.suggestedCreators||[]).forEach(c=>{const k=(c.handle||c.name||'').toLowerCase();if(k&&!seen.has(k)){seen.add(k);rows.push({Handle:c.handle?('@'+c.handle):'',Name:c.name||'',Followers:c.followers||'',Category:c.category||'',City:c.city||'',Source:'Sales-suggested'});}});
+    (r.rounds||[]).forEach(rd=>(rd.rows||[]).forEach(c=>{const k=(c.handle||c.name||'').toLowerCase();if(k&&!seen.has(k)){seen.add(k);rows.push({Handle:c.handle?('@'+c.handle):'',Name:c.name||'',Followers:c.followers||'',Engagement:c.engagement||'',Category:c.category||'',City:c.city||'',Cost:c.cost||'',Round:rd.round});}});});
+    if(!rows.length)return this.toast('No creators in this request yet','err');
+    this.exportRaw(rows,(r.id||'request')+'-'+(r.brandName||'creators').replace(/[^a-z0-9]+/gi,'_')+'.xlsx');
+  },
   // Adding creators to the roster is restricted to the Discovery Manager (+admin).
   canAddRoster(){return this.roleKey()==='discovery_manager'||this.can('admin');},
   // Only a PERMANENT admin (a locked admin account) may delete anything.
@@ -1602,10 +1615,10 @@ const App={
     const k=this.roleKey();
     if(k==='discovery_employee')return false;                     // no enquiry access
     if(k==='discovery_manager')return !!(e.convertedRequestId||e.status==='won');
-    if(k==='sales_employee'||k==='kam_employee')return e.ownerId===this.me.id;
+    if(k==='sales_employee'||k==='kam_employee')return e.ownerId===this.me.id||e.subOwnerId===this.me.id;
     if(k==='sales_manager'||k==='kam_manager')
-      return e.ownerId===this.me.id||this.inMyScope(this.user(e.ownerId));
-    return e.ownerId===this.me.id;
+      return e.ownerId===this.me.id||e.subOwnerId===this.me.id||this.inMyScope(this.user(e.ownerId));
+    return e.ownerId===this.me.id||e.subOwnerId===this.me.id;
   },
   myReqs(){return (this.db.reqs||[]).filter(r=>!r.deletedAt&&this.visReq(r));},
   myEnq(){return (this.db.enq||[]).filter(e=>!e.deletedAt&&this.visEnq(e));},
@@ -2011,7 +2024,7 @@ const App={
     const eb=s=>({new:'b-new',qualified:'b-qualified',proposal:'b-proposal',won:'b-won',lost:'b-lost'}[s]||'b-draft');
     this.set(`
       <div class="pagehead"><div class="lead"><h2>Brands</h2><p>${E.length} logged · convert a qualified brand into a discovery request</p></div>
-        <div class="acts">${this.canExport()?`<button class="btn ghost" onclick="App.exportEnq()">${svg(IC.down,15)} Export</button>`:''}<button class="btn primary" onclick="App.openNewEnq()">${svg(IC.plus,16)} Register brand</button></div></div>
+        <div class="acts"><input class="inp" style="width:200px" placeholder="🔍 Search brands…" value="${esc(this._q||'')}" onkeydown="if(event.key==='Enter'){App._q=this.value.trim().toLowerCase();App.go('enquiries')}">${this._q?`<button class="btn ghost sm" onclick="App._q='';App.go('enquiries')">Clear</button>`:''}${this.canExport()?`<button class="btn ghost" onclick="App.exportEnq()">${svg(IC.down,15)} Export</button>`:''}<button class="btn primary" onclick="App.openNewEnq()">${svg(IC.plus,16)} Register brand</button></div></div>
       ${(()=>{const all=this.myEnq();const cnt=s=>all.filter(e=>e.status===s).length;const open=all.filter(e=>!['won','lost'].includes(e.status)).length;const won=cnt('won');const closed=won+cnt('lost');const conv=closed?Math.round(won/closed*100):0;return `<div class="card pad" style="margin-bottom:16px"><div class="metric-row"><div class="m"><div class="v"><span class="cup" data-to="${all.length}">0</span></div><div class="l">Total</div></div><div class="m"><div class="v"><span class="cup" data-to="${open}">0</span></div><div class="l">Open</div></div><div class="m"><div class="v"><span class="cup" data-to="${cnt('qualified')}">0</span></div><div class="l">Qualified</div></div><div class="m"><div class="v"><span class="cup" data-to="${cnt('proposal')}">0</span></div><div class="l">Proposal</div></div><div class="m"><div class="v" style="color:var(--success)"><span class="cup" data-to="${won}">0</span></div><div class="l">Won</div></div><div class="m"><div class="v"><span class="cup" data-to="${conv}" data-suf="%">0%</span></div><div class="l">Win rate</div></div></div></div>`;})()}
       <div class="toolbar">${[['all','All'],['new','New'],['qualified','Qualified'],['proposal','Proposal'],['won','Won'],['lost','Lost']].map(([k,l])=>`<span class="chip ${(this._efilter||'all')===k?'on':''}" onclick="App._efilter='${k}';App.vEnquiries()">${l}</span>`).join('')}</div>
       <div class="card">${E.length?`<div class="tblwrap"><table class="tbl fixed"><thead><tr><th class="c-brand">Client</th><th class="c-camp">Campaign</th><th class="c-who">Service</th><th class="c-num">Budget</th><th class="c-who">Owner</th><th class="c-status">Source</th><th class="c-status">Status</th><th class="c-when">Logged</th><th style="width:44px"></th></tr></thead><tbody>
@@ -2042,7 +2055,7 @@ const App={
     const e=this.db.enq.find(x=>x.id===id);
     this.drawer(`<div class="dt-top"><div style="display:flex;justify-content:space-between"><div class="dt-meta"><span class="badge b-new" style="text-transform:capitalize">${e.status}</span><span class="cellsub">${fmtDate(e.createdAt)}</span></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div><div class="dt-title">${esc(e.client)}</div><div class="dt-sub">${esc(e.service)} · ${esc(e.budget||'budget TBD')}</div></div>
       <div class="mbody">
-        <div class="specgrid"><div class="s"><div class="k">Campaign</div><div class="v">${esc(e.campaign||'—')}</div></div><div class="s"><div class="k">Owner</div><div class="v">${this.user(e.ownerId)?.name||'—'}</div></div><div class="s"><div class="k">Source</div><div class="v">${esc(e.source||'—')}</div></div><div class="s"><div class="k">Contact</div><div class="v">${esc(e.contact||'—')}</div></div><div class="s"><div class="k">Status</div><div class="v" style="text-transform:capitalize">${e.status}</div></div></div>
+        <div class="specgrid"><div class="s"><div class="k">Campaign</div><div class="v">${esc(e.campaign||'—')}</div></div><div class="s"><div class="k">Owner</div><div class="v">${this.user(e.ownerId)?.name||'—'}</div></div>${e.subOwnerId?`<div class="s"><div class="k">KAM sub-owner</div><div class="v">${esc(this.user(e.subOwnerId)?.name||'—')}</div></div>`:''}<div class="s"><div class="k">Source</div><div class="v">${esc(e.source||'—')}</div></div><div class="s"><div class="k">Contact</div><div class="v">${esc(e.contact||'—')}</div></div><div class="s"><div class="k">Status</div><div class="v" style="text-transform:capitalize">${e.status}</div></div></div>
         ${e.notes?`<div class="notice">${svg(IC.bolt,16)}<div>${esc(e.notes)}</div></div>`:''}
         <div class="sec-t">Update status</div>
         <select class="inp" onchange="App.setEnqStatus('${e.id}',this.value)">${['new','qualified','proposal','won','lost'].map(s=>`<option value="${s}" ${e.status===s?'selected':''} style="text-transform:capitalize">${s}</option>`).join('')}</select>
@@ -2054,7 +2067,7 @@ const App={
         </div>
       </div>`);
   },
-  async setEnqStatus(id,s){const e=this.db.enq.find(x=>x.id===id);if(!e)return;if(!this.can('admin')&&e.ownerId!==this.me.id)return this.toast('Only the owner (who raised it) or an admin can change this brand','err');e.status=s;await this.save('enq');this.toast('Status updated','ok');this.renderNav();this.openEnq(id);},
+  async setEnqStatus(id,s){const e=this.db.enq.find(x=>x.id===id);if(!e)return;if(!this.can('admin')&&e.ownerId!==this.me.id&&e.subOwnerId!==this.me.id)return this.toast('Only the owner, its KAM sub-owner, or an admin can change this brand','err');e.status=s;await this.save('enq');this.toast('Status updated','ok');this.renderNav();this.openEnq(id);},
   async delEnq(id){if(!this.isPermAdmin())return this.toast('Only the permanent admin can delete','err');this.db.enq=this.db.enq.filter(x=>x.id!==id);await this.save('enq');this.closeAll();this.toast('Deleted','ok');this.renderNav();this.vEnquiries();},
   transferEnqModal(id){
     const kams=this.db.users.filter(u=>u.status==='active'&&deptOf(u)==='kam');
@@ -2063,9 +2076,11 @@ const App={
       <div class="mbody"><div class="field"><label>KAM owner</label><select class="inp" id="tk_user">${kams.map(u=>`<option value="${u.id}">${esc(u.name)} · ${ROLES[roleKey(u)]}</option>`).join('')}</select></div></div>
       <div class="mfoot"><button class="btn ghost" onclick="App.closeAll()">Cancel</button><button class="btn primary" onclick="App.transferEnqToKam('${id}')">Transfer</button></div>`);
   },
-  async transferEnqToKam(id){const e=this.db.enq.find(x=>x.id===id);if(!e)return;const uid2=document.getElementById('tk_user').value;const u=this.user(uid2);if(!u)return this.toast('Pick a KAM user','err');e.ownerId=uid2;await this.save('enq');this.closeAll();this.toast('Transferred to '+u.name,'ok');this.renderNav();this.vEnquiries();},
+  async transferEnqToKam(id){const e=this.db.enq.find(x=>x.id===id);if(!e)return;const uid2=document.getElementById('tk_user').value;const u=this.user(uid2);if(!u)return this.toast('Pick a KAM user','err');
+    // Owner STAYS the person who registered the brand; the KAM becomes a sub-owner.
+    e.subOwnerId=uid2;e.transferredBy=this.me.id;e.transferredAt=now();await this.save('enq');this.closeAll();this.toast('Handed to KAM '+u.name+' as sub-owner — you remain the owner','ok');this.renderNav();this.vEnquiries();},
   emailEnq(id){const e=this.db.enq.find(x=>x.id===id);const url='mailto:'+encodeURIComponent(e.contact)+'?subject='+encodeURIComponent('Following up — '+e.service)+'&body='+encodeURIComponent('Hi,\n\nThanks for your interest in working with us on '+e.service+'. We\'d love to share some sample creator profiles.\n\nBest,\n'+this.me.name);window.open(url,'_blank');},
-  convertEnq(id){const e=this.db.enq.find(x=>x.id===id);if(!e)return;if(!this.can('admin')&&e.ownerId!==this.me.id)return this.toast('Only the owner (who raised it) or an admin can convert this brand','err');this.closeAll();this.openNewReq({client:'new',brandName:e.client,niche:e.service,enqId:id});},
+  convertEnq(id){const e=this.db.enq.find(x=>x.id===id);if(!e)return;if(!this.can('admin')&&e.ownerId!==this.me.id&&e.subOwnerId!==this.me.id)return this.toast('Only the owner, its KAM sub-owner, or an admin can convert this brand','err');this.closeAll();this.openNewReq({client:'new',brandName:e.client,niche:e.service,enqId:id});},
   exportEnq(){this.export(this.db.enq.map(e=>({Client:e.client,Contact:e.contact,Service:e.service,Budget:e.budget,Source:e.source,Owner:this.user(e.ownerId)?.name,Status:e.status,Logged:fmtDate(e.createdAt),Notes:e.notes})),'enquiries.xlsx');},
 
   /* ================= REQUESTS ================= */
@@ -2098,7 +2113,7 @@ const App={
     this.set(`
       ${(()=>{const all=this.db.reqs.filter(x=>x.status!=='draft');const by=st=>all.filter(r=>r.status===st).length;const over=all.filter(r=>r.deadline&&r.deadline<now()&&r.status!=='approved').length;const unassigned=all.filter(r=>!r.assigneeId&&r.status!=='approved').length;const done=by('approved');const rate=all.length?Math.round(done/all.length*100):0;const kc=(l,v,col,click)=>`<div class="rqk" ${click?`onclick="${click}" style="cursor:pointer"`:''}><div class="rqk-v" style="${col?`color:${col}`:''}">${v}</div><div class="rqk-l">${l}</div></div>`;return `<div class="rqstrip">${kc('Open',all.length-done,'',`App.filters.status='all';App.filters.special=null;App.vRequests()`)}${kc('In discovery',by('in_progress'),'#5847eb',`App.filters.status='in_progress';App.vRequests()`)}${kc('In review',by('under_review'),'#7048e8',`App.filters.status='under_review';App.vRequests()`)}${kc('Delivered',done,'#0ea472',`App.filters.status='approved';App.vRequests()`)}${kc('Unassigned',unassigned,unassigned?'#e5484d':'',`App.filters.special='flagged';App.vRequests()`)}${kc('Overdue',over,over?'#e5484d':'',`App.filters.special='overdue';App.vRequests()`)}${kc('Delivery rate',rate+'%','#0ea472')}</div>`;})()}
       <div class="pagehead"><div class="lead"><h2>All requests</h2><p>${R.length} request${R.length!==1?'s':''} · ${this.redCount()} flagged · click a card above to filter</p></div>
-        <div class="acts">${this.canExport()?`<button class="btn ghost" onclick="App.exportReqs()">${svg(IC.down,15)} Export</button>`:''}${this.can('raise')?`<button class="btn primary" onclick="App.openNewReq()">${svg(IC.plus,16)} New request</button>`:''}</div></div>
+        <div class="acts"><input class="inp" style="width:200px" placeholder="🔍 Search requests…" value="${esc(this._q||'')}" onkeydown="if(event.key==='Enter'){App._q=this.value.trim().toLowerCase();App.go('requests')}">${this._q?`<button class="btn ghost sm" onclick="App._q='';App.go('requests')">Clear</button>`:''}${this.canExport()?`<button class="btn ghost" onclick="App.exportReqs()">${svg(IC.down,15)} Export</button>`:''}${this.can('raise')?`<button class="btn primary" onclick="App.openNewReq()">${svg(IC.plus,16)} New request</button>`:''}</div></div>
       <div class="toolbar">${chips.map(([k,l])=>`<span class="chip ${f.status===k?'on':''}" onclick="App.filters.status='${k}';App.vRequests()">${l}</span>`).join('')}
         <span style="width:1px;height:22px;background:var(--line);margin:0 4px"></span>
         <span class="chip ${f.special==='flagged'?'on':''}" onclick="App.filters.special=App.filters.special==='flagged'?null:'flagged';App.vRequests()">${svg(IC.bolt,12)} Flagged</span>
@@ -5269,6 +5284,7 @@ Object.assign(App,{
         ${r.campaignId&&!r.discoveryStartedAt?(!r.assigneeId?`<span class="cellsub">Assign this request to start the clock.</span>`:this.canClock(r)?`<button class="btn primary sm" onclick="App.startDiscovery('${r.id}')">${svg(IC.bolt,15)} Start discovery</button>`:`<span class="cellsub">Waiting on <b>${esc(this.clockOwnerName(r))}</b> to start discovery</span>`):''}
         ${running?(this.canClock(r)?`<button class="btn danger sm" onclick="App.endDiscovery('${r.id}')">${svg(IC.check,15)} End discovery</button>`:`<span class="cellsub">Only <b>${esc(this.clockOwnerName(r))}</b> can end this</span>`):''}
         ${r.discoveryEndedAt?`<span class="badge b-approved"><span class="d"></span>Closed after ${r.rounds.length} round${r.rounds.length!==1?'s':''}</span>`:''}
+        ${((r.suggestedCreators&&r.suggestedCreators.length)||(r.rounds||[]).some(rd=>(rd.rows||[]).length))?`<button class="btn ghost sm" onclick="App.downloadReqCreators('${r.id}')">${svg(IC.down,15)} Download creators</button>`:''}
       </div></div>`;
 
     /* ---- open-round workspace ---- */
