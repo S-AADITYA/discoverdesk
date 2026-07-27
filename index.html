@@ -3440,7 +3440,7 @@ const App={
     try{
       await this.ensureRoster();                                    // capped cache (fast)
       if(tab==='mis')html=this.rosterMis();
-      else if(tab==='dashboard')html=this.rosterDash();
+      else if(tab==='dashboard'){ if(CLOUD){try{const{data}=await SB.rpc('roster_stats');if(data)this._rStats=data;}catch(e){}} html=this.rosterDash(); }
       else html=await this.rosterAll();                            // browse=cache, search=server-side
     }catch(e){ html=`<div class="notice">${svg(IC.bolt,15)}<div>Could not load roster: ${esc(e&&e.message||e)}</div></div>`; }
     const el=document.getElementById('rBody'); if(el){el.innerHTML=html;this.animateCounts();this.animateProgress&&this.animateProgress();}
@@ -3456,26 +3456,28 @@ const App={
     }catch(e){el.className='badge b-rejected';el.innerHTML='<span class="d"></span>Sheet check failed';}
   },
   rosterDash(){
-    const R=this.rosterList();const priced=R.filter(r=>this.priceOf(r)==='priced');const barter=R.filter(r=>this.priceOf(r)==='barter');const none=R.filter(r=>this.priceOf(r)==='none');
-    const pr=priced.filter(r=>r.reelCost);const avgReel=pr.length?Math.round(priced.reduce((s,r)=>s+(+r.reelCost||0),0)/pr.length):0;
-    const reach=R.reduce((s,r)=>s+(+r.followers||0),0);
-    const niches={};R.forEach(r=>{const n=r.category||'Other';niches[n]=(niches[n]||0)+1;});
-    const nd=Object.entries(niches).sort((a,b)=>b[1]-a[1]).slice(0,8);const nmax=Math.max(1,...nd.map(x=>x[1]));
-    const seg=[['With price',priced.length,'#0ea472'],['Barter',barter.length,'#e0900a'],['No price',none.length,'#8a8a9a']];const tot=R.length||1;let acc=0;const donut=seg.map(([l,v,c])=>{const s=acc/tot*360;acc+=v;return `${c} ${s}deg ${acc/tot*360}deg`;}).join(',');
+    const R=this.rosterList();const S=this._rStats;   // S = accurate server-side stats over ALL creators
+    const total=S?S.total:(this._rosterTotal||R.length);
+    const pricedN=S?S.priced:R.filter(r=>this.priceOf(r)==='priced').length;
+    const reach=S?S.reach:R.reduce((s,r)=>s+(+r.followers||0),0);
+    const avgReel=S?S.avgReel:(()=>{const pr=R.filter(r=>r.reelCost);return pr.length?Math.round(R.reduce((s,r)=>s+(+r.reelCost||0),0)/pr.length):0;})();
+    const nd=(S&&S.niches)?S.niches.map(x=>[x.n,x.c]):(()=>{const n={};R.forEach(r=>{const k=r.category||'Other';n[k]=(n[k]||0)+1;});return Object.entries(n).sort((a,b)=>b[1]-a[1]).slice(0,8);})();
+    const nmax=Math.max(1,...nd.map(x=>x[1]));const unpriced=Math.max(0,total-pricedN);
+    const seg=[['With price',pricedN,'#0ea472'],['No price / barter',unpriced,'#8a8a9a']];const tot=total||1;let acc=0;const donut=seg.map(([l,v,c])=>{const st=acc/tot*360;acc+=v;return `${c} ${st}deg ${acc/tot*360}deg`;}).join(',');
     const kpi=(l,v,sub)=>`<div class="card pad"><div class="l" style="font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)">${l}</div><div style="font-family:var(--disp);font-size:30px;font-weight:600;margin-top:6px">${v}</div><div class="cellsub" style="margin-top:4px">${sub}</div></div>`;
     return `<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(210px,260px));gap:16px;margin-bottom:16px">
-      ${kpi('Total creators','<span class="cup" data-to="'+(this._rosterTotal||R.length)+'">0</span>',(this._rosterTotal&&this._rosterTotal>R.length)?('charts on a '+nfmt(R.length)+' sample · search covers all'):(priced.length+' priced · '+barter.length+' barter'))}
+      ${kpi('Total creators','<span class="cup" data-to="'+total+'">0</span>',nfmt(pricedN)+' priced creators')}
       ${kpi('Avg reel cost','\u20b9'+(avgReel>=1000?Math.round(avgReel/1000)+'K':avgReel),'across priced creators')}
       ${kpi('Combined reach',nfmt(reach),'total followers')}
       ${kpi('Live campaign budget','\u2014','0 executions')}
     </div>
     <div class="two-col">
       <div class="card pad"><div style="font-family:var(--disp);font-weight:600;font-size:16px">Top niches</div><div class="cellsub" style="margin-bottom:14px">Where your roster is concentrated</div>
-        ${nd.map(([n,v])=>`<div style="display:flex;align-items:center;gap:12px;margin-bottom:11px"><div style="width:92px;font-size:13px">${esc(n)}</div><div class="bt" style="flex:1"><div class="bf" style="width:${v/nmax*100}%"></div></div><div class="mono" style="width:46px;text-align:right;font-weight:600">${v}</div></div>`).join('')}
+        ${nd.map(([n,v])=>`<div style="display:flex;align-items:center;gap:12px;margin-bottom:11px"><div style="width:92px;font-size:13px">${esc(n)}</div><div class="bt" style="flex:1"><div class="bf" style="width:${v/nmax*100}%"></div></div><div class="mono" style="width:56px;text-align:right;font-weight:600">${nfmt(v)}</div></div>`).join('')}
       </div>
       <div class="card pad"><div style="font-family:var(--disp);font-weight:600;font-size:16px">Split by price list</div><div class="cellsub" style="margin-bottom:14px">Paid vs barter vs unpriced</div>
         <div style="display:flex;align-items:center;gap:22px"><div style="width:152px;height:152px;border-radius:50%;background:conic-gradient(${donut});position:relative;flex:none"><div style="position:absolute;inset:36px;background:var(--surface);border-radius:50%"></div></div>
-        <div style="flex:1">${seg.map(([l,v,c])=>`<div style="display:flex;align-items:center;gap:9px;padding:6px 0"><span style="width:12px;height:12px;border-radius:4px;background:${c}"></span><span style="flex:1;font-size:13px">${l}</span><span class="mono" style="font-weight:600">${v}</span></div>`).join('')}</div></div>
+        <div style="flex:1">${seg.map(([l,v,c])=>`<div style="display:flex;align-items:center;gap:9px;padding:6px 0"><span style="width:12px;height:12px;border-radius:4px;background:${c}"></span><span style="flex:1;font-size:13px">${l}</span><span class="mono" style="font-weight:600">${nfmt(v)}</span></div>`).join('')}</div></div>
       </div>
     </div>`;
   },
