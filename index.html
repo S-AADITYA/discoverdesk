@@ -1737,15 +1737,15 @@ const App={
         const PAGE=1000, MAX=3000, out=[];
         for(let i=0;i<MAX;i+=PAGE){
           let data,error,tries=0;
-          do{({data,error}=await SB.from('roster_v').select('*').order('created_at',{ascending:false}).range(i,i+PAGE-1));if(error){tries++;if(tries<3)await new Promise(r=>setTimeout(r,300*tries));}}while(error&&tries<3);
+          do{({data,error}=await this._notSheet(SB.from('roster_v').select('*')).order('created_at',{ascending:false}).range(i,i+PAGE-1));if(error){tries++;if(tries<3)await new Promise(r=>setTimeout(r,300*tries));}}while(error&&tries<3);
           if(error)throw error;
           out.push(...(data||[]));
           if(!data||data.length<PAGE)break;
         }
-        this.db.roster = out.map(row=>({ ...row.data, ...(row.contact||{}), id:row.id, _cmask:!row.contact_visible }));
+        this.db.roster = out.map(row=>({ ...row.data, ...(row.contact||{}), id:row.id, _cmask:!row.contact_visible })).filter(r=>r.source!=='sheet');
         this._kvFb.roster=false; this._rosterErr=false;
         // True total (the cache is capped) — for an accurate "Total creators".
-        try{ const cr=await SB.from('roster_v').select('id',{count:'exact',head:true}); this._rosterTotal=cr.count||this.db.roster.length; }catch{ this._rosterTotal=this.db.roster.length; }
+        try{ const cr=await this._notSheet(SB.from('roster_v').select('id',{count:'exact',head:true})); this._rosterTotal=cr.count||this.db.roster.length; }catch{ this._rosterTotal=this.db.roster.length; }
       }catch(e){
         console.error('roster load failed:',e&&e.message);
         this._rosterErr=true; this._kvFb.roster=true;
@@ -2693,7 +2693,7 @@ const App={
     let list;
     if(CLOUD){
       // Search the FULL roster in Postgres (roster_v), not just the local cache.
-      let query=SB.from('roster_v').select('id,data').limit(400);
+      let query=this._notSheet(SB.from('roster_v').select('id,data')).limit(400);
       if(f.city)query=query.ilike('data->>city','%'+f.city+'%');
       if(f.niche)query=query.ilike('data->>category','%'+f.niche+'%');
       if(f.platform)query=query.ilike('data->>platform',f.platform);
@@ -3437,6 +3437,12 @@ const App={
   tierOf(f){f=+f||0;return f>=1e6?'Mega':f>=1e5?'Macro':f>=1e4?'Micro':'Nano';},
   priceOf(r){return r.priceType||((r.reelCost||(r.pricing&&r.pricing.reel))?'priced':'none');},
   rosterList(){return this.db.roster||[];},
+  // AUTO-FEED HIDDEN (requested 2026-07-27): sheet-imported creators (data.source='sheet',
+  // the ~18k bulk Google-Sheet import) are excluded from EVERY roster_v read, so the app
+  // shows only creators added inside the platform. The rows stay in Supabase — delete this
+  // one filter (and the .filter below in _loadRoster) to unhide them again. Keeps NULL/other
+  // sources visible; mirrors the proven verified-filter pattern used in _rosterSearchServer.
+  _notSheet(q){return q.or('data->>source.is.null,data->>source.neq.sheet');},
   avatarColor(seed){const cols=['#12b886','#4c6ef5','#e8590c','#7048e8','#e64980','#0ca678','#f08c00','#1098ad'];let h=0;for(const ch of (seed||'x'))h=(h*31+ch.charCodeAt(0))>>>0;return cols[h%cols.length];},
   vRoster(){
     if(!this.can('roster'))return this.set(this.emptyBox('No access','The roster is available to Discovery, KAM & Admin.'));
@@ -3459,7 +3465,10 @@ const App={
     try{
       await this.ensureRoster();                                    // capped cache (fast)
       if(tab==='mis')html=this.rosterMis();
-      else if(tab==='dashboard'){ if(CLOUD){try{const{data}=await SB.rpc('roster_stats');if(data)this._rStats=data;}catch(e){}} html=this.rosterDash(); }
+      // Dashboard stats computed from the (sheet-filtered) cache, NOT the roster_stats RPC —
+      // that RPC counts ALL rows incl. the hidden sheet imports. Platform creators sit well
+      // under the cache cap, so the cache is complete and the totals are accurate.
+      else if(tab==='dashboard'){ this._rStats=null; html=this.rosterDash(); }
       else html=await this.rosterAll();                            // browse=cache, search=server-side
     }catch(e){ html=`<div class="notice">${svg(IC.bolt,15)}<div>Could not load roster: ${esc(e&&e.message||e)}</div></div>`; }
     const el=document.getElementById('rBody'); if(el){el.innerHTML=html;this.animateCounts();this.animateProgress&&this.animateProgress();}
@@ -3504,7 +3513,7 @@ const App={
   // creators without loading them into the browser. Paginated.
   async _rosterSearchServer(qraw,f){
     const size=48,page=this._rpage||0;
-    let query=SB.from('roster_v').select('id,data',{count:'exact'});
+    let query=this._notSheet(SB.from('roster_v').select('id,data',{count:'exact'}));
     if(qraw){const L='%'+qraw.replace(/[,%()*]/g,' ').trim()+'%';query=query.or(`data->>handle.ilike.${L},data->>name.ilike.${L},data->>category.ilike.${L},data->>city.ilike.${L}`);}
     if(f.niche)query=query.ilike('data->>category','%'+f.niche+'%');
     if(f.city)query=query.ilike('data->>city','%'+f.city+'%');
