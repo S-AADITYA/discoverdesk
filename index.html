@@ -2676,7 +2676,7 @@ const App={
       // Search the FULL roster in Postgres (roster_v), not just the local cache.
       let query=SB.from('roster_v').select('id,data').limit(400);
       if(f.city)query=query.ilike('data->>city','%'+f.city+'%');
-      if(f.niche)query=query.or(`data->>category.ilike.%${f.niche}%,niches.cs.{${f.niche}}`);
+      if(f.niche)query=query.ilike('data->>category','%'+f.niche+'%');
       if(f.platform)query=query.ilike('data->>platform',f.platform);
       if(f.gender)query=query.eq('data->>gender',f.gender);
       if(f.priceType==='priced')query=query.eq('data->>priceType','priced');
@@ -3483,35 +3483,38 @@ const App={
   // creators without loading them into the browser. Paginated.
   async _rosterSearchServer(qraw,f){
     const size=48,page=this._rpage||0;
-    const L='%'+qraw.replace(/[,%()*]/g,' ').trim()+'%';
-    let query=SB.from('roster_v').select('id,data',{count:'exact'})
-      .or(`data->>handle.ilike.${L},data->>name.ilike.${L},data->>category.ilike.${L},data->>city.ilike.${L}`);
+    let query=SB.from('roster_v').select('id,data',{count:'exact'});
+    if(qraw){const L='%'+qraw.replace(/[,%()*]/g,' ').trim()+'%';query=query.or(`data->>handle.ilike.${L},data->>name.ilike.${L},data->>category.ilike.${L},data->>city.ilike.${L}`);}
     if(f.niche)query=query.ilike('data->>category','%'+f.niche+'%');
+    if(f.city)query=query.ilike('data->>city','%'+f.city+'%');
     if(f.platform)query=query.ilike('data->>platform',f.platform);
     if(f.price==='priced')query=query.eq('data->>priceType','priced');
     if(f.verified==='yes')query=query.eq('data->>verified','true');
     else if(f.verified==='no')query=query.or('data->>verified.is.null,data->>verified.eq.false');
     query=query.order('id').range(page*size,page*size+size-1);
     const {data,count,error}=await query;
-    if(error)return `<div class="notice" style="margin-top:8px">${svg(IC.bolt,15)}<div>Search failed: ${esc(error.message||error)}</div></div>`;
+    if(error)return `<div class="notice" style="margin-top:8px">${svg(IC.bolt,15)}<div>Roster query failed: ${esc(error.message||error)}</div></div>`;
     let rows=(data||[]).map(row=>({...row.data,id:row.id}));
     if(f.tier)rows=rows.filter(r=>this.tierOf(r.followers)===f.tier);
     const total=count||0;
     const chip=(k,l,c)=>`<span class="chip ${((f.price||'all')===k)?'on':''}" onclick="App.setRF('price','${k==='all'?'':k}')">${c?`<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${c};margin-right:6px;vertical-align:middle"></span>`:''}${l}</span>`;
+    const niches=[...new Set((this.db.roster||[]).map(r=>r.category).filter(Boolean))].sort().slice(0,60);
     return `<div class="rfilters">
-      <span class="cellsub" style="font-weight:600">Search: "${esc(qraw)}"</span>
-      <button class="btn ghost sm" onclick="App._q='';App._rpage=0;App.vRoster()">Clear search</button>
+      <input class="inp" style="width:240px" placeholder="🔍 Search name / handle / category / city" value="${esc(qraw)}" onkeydown="if(event.key==='Enter'){App._q=this.value.trim().toLowerCase();App._rpage=0;App.vRoster();}">
       ${chip('all','All')}${chip('priced','With price','#0ea472')}
+      <select class="inp" style="width:auto" onchange="App.setRF('niche',this.value)"><option value="">All niches</option>${niches.map(n=>`<option ${f.niche===n?'selected':''}>${esc(n)}</option>`).join('')}</select>
+      <select class="inp" style="width:auto" onchange="App.setRF('tier',this.value)"><option value="">All tiers</option>${['Nano','Micro','Macro','Mega'].map(t=>`<option ${f.tier===t?'selected':''}>${t}</option>`).join('')}</select>
       <select class="inp" style="width:auto" onchange="App.setRF('verified',this.value)"><option value="">Any status</option><option value="yes" ${f.verified==='yes'?'selected':''}>Verified</option><option value="no" ${f.verified==='no'?'selected':''}>Unverified</option></select>
-      <span style="flex:1"></span><span class="cellsub">${nfmt(total)} match${total!==1?'es':''}</span></div>
-      ${rows.length?`<div class="ccards">${rows.map(r=>this.creatorCard(r)).join('')}</div>`:this.emptyBox('No creators match "'+esc(qraw)+'"','Try a shorter or different term.','')}
+      ${(qraw||f.niche||f.tier||f.price||f.verified)?`<button class="btn ghost sm" onclick="App._q='';App._rf={};App._rpage=0;App.vRoster()">Clear</button>`:''}
+      <span style="flex:1"></span><span class="cellsub">${nfmt(total)} ${qraw?('match'+(total!==1?'es':'')):'creators'}</span></div>
+      ${rows.length?`<div class="ccards">${rows.map(r=>this.creatorCard(r)).join('')}</div>`:this.emptyBox(qraw?('No creators match "'+esc(qraw)+'"'):'No creators found','Try a different search or clear filters.','')}
       ${total>size?`<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 2px"><span class="cellsub">Showing ${page*size+1}–${Math.min(total,page*size+rows.length)} of ${nfmt(total)}</span><div style="display:flex;gap:6px">${page>0?`<button class="btn ghost xs" onclick="App._rpage=${page-1};App.vRoster()">← Prev</button>`:''}${(page+1)*size<total?`<button class="btn ghost xs" onclick="App._rpage=${page+1};App.vRoster()">Next →</button>`:''}</div></div>`:''}`;
   },
   async rosterAll(){
     const f=this._rf=this._rf||{};
     const qraw=(this._q||'').trim();
-    // At 18k+ a text search runs SERVER-SIDE over the FULL roster (not the cache).
-    if(qraw && CLOUD) return await this._rosterSearchServer(qraw,f);
+    // At 18k+ BOTH browse and search run SERVER-SIDE over the FULL roster.
+    if(CLOUD) return await this._rosterSearchServer(qraw,f);
     let R=this.rosterList();
     const q=qraw.toLowerCase();
     if(q)R=R.filter(r=>((r.handle||'')+(r.name||'')+(r.category||'')+(r.city||'')+(r.country||'')+(r.email||'')+(r.phone||'')+(r.niches||[]).join(' ')+(r.tags||[]).join(' ')+(r.hashtags||[]).join(' ')+(r.brandsTagged||[]).join(' ')).toLowerCase().includes(q));
