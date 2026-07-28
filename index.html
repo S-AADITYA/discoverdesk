@@ -903,6 +903,8 @@ const now=()=>Date.now();const D=ms=>new Date(ms);
 const fmtDate=ms=>ms?D(ms).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}):'—';
 const fmtExact=t=>{const d=new Date(t);return d.toLocaleDateString('en-GB')+' '+d.toLocaleTimeString('en-GB',{hour12:false});};
 const fmtDT=ms=>ms?D(ms).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'—';
+// value string for <input type="datetime-local"> in LOCAL time (not UTC)
+const localDTInput=ms=>{const d=D(ms);const p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;};
 const durH=(a,b)=>a&&b?Math.max(0,Math.round((b-a)/36e5*10)/10):null;
 const fmtDur=h=>h==null?'—':h<24?h+'h':(Math.round(h/24*10)/10)+'d';
 const initials=n=>(n||'?').split(' ').map(s=>s[0]).slice(0,2).join('').toUpperCase();
@@ -2179,7 +2181,7 @@ const App={
         <span style="flex:1"></span><span class="chip ${f.mine?'on':''}" onclick="App.filters.mine=!App.filters.mine;App.vRequests()">Only mine</span></div>
       ${sel.length?`<div class="selbar"><b>${sel.length}</b> selected ${canAssign?`<select class="mini-select" style="color:var(--ink)" onchange="if(this.value)App.bulkAssign(this.value)"><option value="">Assign to…</option>${this.assignTargets().map(u=>`<option value="${u.id}">${esc(u.name)} · ${ROLES[roleKey(u)]}</option>`).join("")}</select>`:''}<select class="mini-select" style="color:var(--ink)" onchange="if(this.value)App.bulkPriority(this.value)"><option value="">Priority…</option><option value="high">High</option><option value="med">Medium</option><option value="low">Low</option></select><button class="btn ghost xs" onclick="App.exportReqsSel()">${svg(IC.down,13)} Export</button>${this.can('admin')?`<button class="btn danger xs" onclick="App.confirmBulkDelete('requests')">${svg(IC.x,13)} Delete</button>`:''}<span style="flex:1"></span><button class="btn ghost xs" onclick="App._rsel={};App.vRequests()">Clear</button></div>`:''}
       <div class="card">${R.length?`<div class="tblwrap"><table class="tbl fixed"><thead><tr><th style="width:34px"></th><th class="c-id">ID</th><th class="c-brand">Brand / niche</th><th class="c-camp">Campaign</th><th class="c-status">Priority</th><th class="c-status">Flags</th><th class="c-who">Owner</th><th class="c-who">Assigned by Sales/KAM</th><th class="c-who">Assigned by Discovery Manager</th><th class="c-num">Rounds</th><th class="c-when">Deadline</th><th class="c-status">Status</th></tr></thead><tbody>
-        ${R.map(r=>`<tr class="click" onclick="App.openReq('${r.id}')"><td onclick="event.stopPropagation()"><span class="chk ${this._rsel[r.id]?'on':''}" onclick="App.rsel('${r.id}')">${svg(IC.check,12)}</span></td><td class="id">${r.id}</td><td><div class="strong">${esc(r.brandName)}</div><div class="cellsub">${esc(r.niche)} · Sample round ${r.sampleRound||r.round||1}</div></td><td>${this.campChip(r.campaignId,r.campaignName)}</td><td>${this.priBadge(r.priority)}</td><td>${this.flagBadge(r)||'<span class="cellsub">—</span>'}</td><td title="${esc((this.user(r.requesterId)||{}).name||'')}">${this.whoCell(r.requesterId)}</td><td>${r.routedById?this.whoCell(r.routedToManagerId):'<span class="cellsub">—</span>'}</td><td>${(r.assigneeId||r.assignedToId)?this.whoCell(r.assignedToId||r.assigneeId):`<span class="cellsub">${this.hopLabel(r)}</span>`}</td><td><span class="mono" style="font-weight:600">${r.rounds.length}</span>${r.rounds.some(x=>x.decision==='rejected')?' <span class="cellsub">('+r.rounds.filter(x=>x.decision==='rejected').length+'r)</span>':''}</td><td>${this.deadlineCell(r)}</td><td>${statusBadge(r.status)}</td></tr>`).join('')}
+        ${R.map(r=>`<tr class="click" onclick="App.openReq('${r.id}')"><td onclick="event.stopPropagation()"><span class="chk ${this._rsel[r.id]?'on':''}" onclick="App.rsel('${r.id}')">${svg(IC.check,12)}</span></td><td class="id">${r.id}</td><td><div class="strong">${esc(r.brandName)}</div><div class="cellsub">${esc(r.niche)} · Sample round ${r.sampleRound||r.round||1}</div></td><td>${this.campChip(r.campaignId,r.campaignName)}</td><td>${this.priBadge(r.priority)}</td><td>${this.flagBadge(r)||'<span class="cellsub">—</span>'}</td><td title="${esc((this.user(r.requesterId)||{}).name||'')}">${this.whoCell(r.requesterId)}</td><td>${r.routedById?this.whoCell(r.routedToManagerId):'<span class="cellsub">—</span>'}</td><td>${(r.assigneeId||r.assignedToId)?this.whoCell(r.assignedToId||r.assigneeId):`<span class="cellsub">${this.hopLabel(r)}</span>`}</td><td><span class="mono" style="font-weight:600">${r.rounds.length}</span>${r.rounds.some(x=>x.decision==='rejected')?' <span class="cellsub">('+r.rounds.filter(x=>x.decision==='rejected').length+'r)</span>':''}</td><td>${this.deadlineCell(r)}</td><td>${statusBadge(r.status)}<div style="margin-top:4px">${this.discBadge(r)}</div></td></tr>`).join('')}
         </tbody></table></div>`:this.emptyBox('No requests here','Try a different filter or raise a new request.',this.can('raise')?`<button class="btn primary" onclick="App.openNewReq()">${svg(IC.plus,16)} New request</button>`:'')}</div>`);
   },
   rsel(id){this._rsel[id]=!this._rsel[id];this.vRequests();},
@@ -2212,14 +2214,14 @@ const App={
         </div>
         <div class="field"><label>Priority</label><div class="role-pick three"><div class="r" data-pri="low" onclick="App.pickPri('low')">Low</div><div class="r on" data-pri="med" onclick="App.pickPri('med')">Medium</div><div class="r" data-pri="high" onclick="App.pickPri('high')">High</div></div></div>
         <div class="frow"><div class="field"><label>Brand budget (₹)</label><input class="inp" id="nq_budget" type="number" placeholder="what the client pays"></div>${this.can('bridge')?`<div class="field"><label>Internal cost est. (₹)</label><input class="inp" id="nq_icost" type="number" placeholder="your cost"></div>`:''}</div>
-        <div class="frow"><div class="field"><label>Deadline</label><input class="inp" id="nq_deadline" type="date"></div>
+        <div class="frow"><div class="field"><label>Deadline <span class="cellsub">(date & time — same-day is allowed)</span></label><input class="inp" id="nq_deadline" type="datetime-local"></div>
           <div class="field"><label>${this.can('assign')?'Assign to Discovery':'Assign to Discovery Manager <span style="color:var(--danger)">*</span>'}</label><select class="inp" id="nq_assignee">${this.can('assign')?`<option value="">Unassigned</option>`+this.db.users.filter(u=>u.role==='discovery'&&u.status==='active').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join(''):`<option value="">— select a Discovery Manager —</option>`+this.db.users.filter(u=>roleKey(u)==='discovery_manager'&&u.status==='active').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></div></div>
       </div>
       <div class="mfoot"><button class="btn ghost" onclick="App.submitReq(true)">Save draft</button><button class="btn primary" onclick="App.submitReq(false)">Raise request</button></div>`);
     this._client=pre.client==='new'?'new':'existing';this._enqId=pre.enqId||null;this._pri='med';
     if(pre.brandName){document.getElementById('nq_brand').value='__new';}
     this.onTypeChange();
-    document.getElementById('nq_deadline').value=new Date(now()+3*864e5).toISOString().slice(0,10);
+    {const _dl=D(now()+3*864e5);_dl.setHours(19,0,0,0);document.getElementById('nq_deadline').value=localDTInput(_dl.getTime());}
   },
   pickClient(c){this._client=c;document.querySelectorAll('[data-c]').forEach(e=>e.classList.toggle('on',e.dataset.c===c));},
   pickPri(p){this._pri=p;document.querySelectorAll('[data-pri]').forEach(e=>e.classList.toggle('on',e.dataset.pri===p));},
@@ -2521,7 +2523,7 @@ const App={
     const myDone=mine.filter(r=>r.assigneeId===this.me.id&&r.submittedAt);
     const tats=myDone.map(r=>durH(r.assignedAt,r.submittedAt));const avgTat=tats.length?Math.round(tats.reduce((s,x)=>s+x,0)/tats.length):null;
     const onTime=done.filter(r=>{const l=r.rounds[r.rounds.length-1];return r.deadline&&l&&l.reviewedAt&&l.reviewedAt<=r.deadline;}).length;
-    const card=(r,cta)=>{const late=r.deadline&&r.deadline<now()&&r.status!=='approved';return `<div class="card pad" style="margin-bottom:12px;cursor:pointer;${late?'border-color:#f5cccc':''}" onclick="App.openReq('${r.id}')"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div class="mono cellsub">${r.id}</div><div style="font-family:var(--disp);font-weight:600;font-size:16px;margin:2px 0">${esc(r.brandName)}</div><div class="cellsub">${esc(r.niche)} · ${nfmt(r.fMin)}–${nfmt(r.fMax)} · ${esc(r.pType)}</div><div class="cellsub">Requested by <b>${esc(this.user(r.requesterId)?.name||'—')}</b></div></div><div style="text-align:right">${statusBadge(r.status)}<div style="margin-top:6px">${this.slaChip(r)}</div></div></div><div class="pill-row" style="margin-top:10px">${this.priBadge(r.priority)}<span class="tag">${r.qty} profiles</span><span class="tag">${esc(r.platform)}</span>${r.rounds.length?`<span class="tag">Round ${r.rounds.length}</span>`:''}${this.flagBadge(r)}</div>${cta?`<div class="actbar"><button class="btn primary sm" onclick="event.stopPropagation();App.openReq('${r.id}')">${svg(IC.up,15)} ${cta}</button>${r.status==='assigned'?`<button class="btn ghost sm" onclick="event.stopPropagation();App.startWork('${r.id}')">Start</button>`:''}</div>`:''}</div>`;};
+    const card=(r,cta)=>{const late=r.deadline&&r.deadline<now()&&r.status!=='approved';return `<div class="card pad" style="margin-bottom:12px;cursor:pointer;${late?'border-color:#f5cccc':''}" onclick="App.openReq('${r.id}')"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div class="mono cellsub">${r.id}</div><div style="font-family:var(--disp);font-weight:600;font-size:16px;margin:2px 0">${esc(r.brandName)}</div><div class="cellsub">${esc(r.niche)} · ${nfmt(r.fMin)}–${nfmt(r.fMax)} · ${esc(r.pType)}</div><div class="cellsub">Requested by <b>${esc(this.user(r.requesterId)?.name||'—')}</b>${this.brandSiteLink(r,{stop:1,small:1})?' · '+this.brandSiteLink(r,{stop:1,small:1}):''}</div></div><div style="text-align:right">${statusBadge(r.status)}<div style="margin-top:6px">${this.discBadge(r)}</div><div style="margin-top:6px">${this.slaChip(r)}</div></div></div><div class="pill-row" style="margin-top:10px">${this.priBadge(r.priority)}<span class="tag">${r.qty} profiles</span><span class="tag">${esc(r.platform)}</span>${r.rounds.length?`<span class="tag">Round ${r.rounds.length}</span>`:''}${this.flagBadge(r)}</div>${cta?`<div class="actbar"><button class="btn primary sm" onclick="event.stopPropagation();App.openReq('${r.id}')">${svg(IC.up,15)} ${cta}</button>${r.status==='assigned'?`<button class="btn ghost sm" onclick="event.stopPropagation();App.startWork('${r.id}')">Start</button>`:''}</div>`:''}</div>`;};
     this.set(`<div class="grid kpis" style="margin-bottom:16px"><div class="card kpi"><div class="ic" style="background:#5847eb20;color:#5847eb">${svg(IC.bolt,19)}</div><div class="v"><span class="cup" data-to="${active.length}">0</span></div><div class="l">To work on</div></div><div class="card kpi"><div class="ic" style="background:#6b3fd420;color:#6b3fd4">${svg(IC.clock,19)}</div><div class="v"><span class="cup" data-to="${waiting.length}">0</span></div><div class="l">Awaiting review</div></div><div class="card kpi"><div class="ic" style="background:#0ea47220;color:#0ea472">${svg(IC.check,19)}</div><div class="v"><span class="cup" data-to="${done.length}">0</span></div><div class="l">Delivered</div></div><div class="card kpi"><div class="ic" style="background:#e0900a20;color:#e0900a">${svg(IC.clock,19)}</div><div class="v">${fmtDur(avgTat)}</div><div class="l">Your avg turnaround</div></div></div>
       <div class="toolbar">${[['all','All'],['overdue','Overdue'],['flagged','Flagged'],['high','High priority']].map(([k,l])=>`<span class="chip ${df===k?'on':''}" onclick="App._dfilter='${k}';App.vDiscovery()">${l}</span>`).join('')}</div>
       <div class="sec-t">Needs your attention</div>${active.length?active.map(r=>card(r,'Upload sheet')).join(''):this.emptyBox('All clear','Nothing matches this filter.','')}
@@ -4802,7 +4804,24 @@ where email = '${esc(this.me.email||'you@yourcompany.com')}';</pre><p class="cel
       </div><div class="mfoot"><button class="btn primary" onclick="App.closeAll()">Close</button></div>`);
   },
   async resetPin(id){const u=this.user(id);u.pin=genPin();u.pass=u.pin;await this.save('users');this.toast('New PIN set','ok');this.showPin(id);},
-  copyText(t){try{navigator.clipboard.writeText(t);this.toast('Copied','ok');}catch(e){this.toast('Copy not available','err');}},
+  copyText(t){
+    t=t==null?'':String(t);
+    const ok=()=>this.toast('Copied','ok');
+    if(navigator.clipboard&&window.isSecureContext){
+      navigator.clipboard.writeText(t).then(ok,()=>this._copyFallback(t,ok));
+      return;
+    }
+    this._copyFallback(t,ok);
+  },
+  _copyFallback(t,ok){
+    try{
+      const ta=document.createElement('textarea');ta.value=t;
+      ta.style.position='fixed';ta.style.top='-1000px';ta.style.opacity='0';ta.setAttribute('readonly','');
+      document.body.appendChild(ta);ta.focus();ta.select();ta.setSelectionRange(0,t.length);
+      const done=document.execCommand('copy');document.body.removeChild(ta);
+      done?ok():this.toast('Copy not available — select the text and press Ctrl+C','err');
+    }catch(e){this.toast('Copy not available — select the text and press Ctrl+C','err');}
+  },
   emailCreds(id){const u=this.user(id);const url='mailto:'+encodeURIComponent(u.email)+'?subject='+encodeURIComponent('Your DiscoverDesk login')+'&body='+encodeURIComponent('Hi '+u.name+',\n\nYour DiscoverDesk account is ready.\nEmail: '+u.email+'\nPIN: '+(u.pin||u.pass)+'\n\nSign in and you\'re set.\n\n'+this.me.name);window.open(url,'_blank');},
 
   search(q){this._q=(q||'').trim().toLowerCase();if(['requests','enquiries','influencers','creators','roster'].includes(this.view))this.go(this.view);},
@@ -4976,6 +4995,15 @@ Object.assign(App,{
   openRound(r){return (r.rounds||[]).find(rd=>this.roundStatus(rd)==='open')||null;},
   submittedRound(r){return (r.rounds||[]).find(rd=>this.roundStatus(rd)==='submitted')||null;},
   discRunning(r){return !!(r.discoveryStartedAt&&!r.discoveryEndedAt);},
+  // A small at-a-glance badge so anyone who can see a request also sees its discovery state.
+  discBadge(r){
+    if(!r||r.status==='draft')return '';
+    if(r.discoveryEndedAt)return '<span class="badge b-approved" style="font-size:9px"><span class="d"></span>Discovery ended</span>';
+    if(this.discRunning(r))return '<span class="badge b-progress" style="font-size:9px"><span class="d"></span>Discovery live</span>';
+    return '<span class="badge b-draft" style="font-size:9px"><span class="d"></span>Not started</span>';
+  },
+  // Clickable brand website (mandatory on every request). `stop` guards clicks inside clickable cards.
+  brandSiteLink(r,opt){opt=opt||{};const w=r&&(r.brandWebsite||(this.brand(r.brandId)||{}).website);if(!w)return opt.dash?'<span class="cellsub">—</span>':'';const href=/^https?:/i.test(w)?w:'https://'+w;return `<a href="${esc(href)}" target="_blank" rel="noopener"${opt.stop?' onclick="event.stopPropagation()"':''} style="color:var(--primary);font-weight:600;text-decoration:none;font-size:${opt.small?'11.5px':'12.5px'}">${esc(w.replace(/^https?:\/\//,''))} ↗</a>`;},
   isRequester(r){return !!r&&(r.requesterId===this.me.id||this.can('admin'));},
   /* B9 — the Discovery Clock belongs to the people doing discovery, not the
      Sales/KAM person who raised the request. Only the assigned Discovery
@@ -5298,7 +5326,7 @@ Object.assign(App,{
         </div>
         <div class="field"><label>Priority</label><div class="role-pick three"><div class="r" data-pri="low" onclick="App.pickPri('low')">Low</div><div class="r on" data-pri="med" onclick="App.pickPri('med')">Medium</div><div class="r" data-pri="high" onclick="App.pickPri('high')">High</div></div></div>
         <div class="frow"><div class="field"><label>Brand budget (₹)</label><input class="inp" id="nq_budget" type="number" placeholder="what the client pays"></div>${this.can('bridge')?`<div class="field"><label>Internal cost est. (₹)</label><input class="inp" id="nq_icost" type="number" placeholder="your cost"></div>`:''}</div>
-        <div class="frow"><div class="field"><label>Deadline</label><input class="inp" id="nq_deadline" type="date"></div>
+        <div class="frow"><div class="field"><label>Deadline <span class="cellsub">(date & time — same-day is allowed)</span></label><input class="inp" id="nq_deadline" type="datetime-local"></div>
           <div class="field"><label>${this.can('assign')?'Assign to Discovery':'Assign to Discovery Manager <span style="color:var(--danger)">*</span>'}</label><select class="inp" id="nq_assignee">${this.can('assign')?`<option value="">Unassigned</option>`+this.db.users.filter(u=>u.role==='discovery'&&u.status==='active').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join(''):`<option value="">— select a Discovery Manager —</option>`+this.db.users.filter(u=>roleKey(u)==='discovery_manager'&&u.status==='active').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></div></div>
       </div>
       <div class="mfoot"><button class="btn ghost" onclick="App.submitReq(true)">Save draft</button><button class="btn primary" onclick="App.submitReq(false)">Raise request</button></div>`);
@@ -5307,7 +5335,7 @@ Object.assign(App,{
     this.onBrandPick();
     if(pre.campaignName){document.getElementById('nq_camp').value='__new';this.onCampPick();document.getElementById('nq_newcampname').value=pre.campaignName;}
     this.onTypeChange();
-    document.getElementById('nq_deadline').value=new Date(now()+3*864e5).toISOString().slice(0,10);
+    {const _dl=D(now()+3*864e5);_dl.setHours(19,0,0,0);document.getElementById('nq_deadline').value=localDTInput(_dl.getTime());}
   },
   onBrandPick(){
     const v=document.getElementById('nq_brand').value;
