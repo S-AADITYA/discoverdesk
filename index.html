@@ -1708,15 +1708,28 @@ const App={
        discovery_manager    own department  converted only       all
        discovery_employee   own team        none                 assigned only  */
   sameTeam(u){const a=this.me.teamUid,b=u&&u.teamUid;return !!a&&!!b&&a===b;},
-  /* Team scope with a graceful fallback: until teams are actually assigned
-     (before the RBAC migration runs, or for Sales/KAM we deliberately did not
-     auto-place), teamUid is null on both sides and a strict team check would
-     collapse every list to just yourself. Fall back to the department, which
-     still honours the hard rule that nobody sees another department. */
+  /* Every team this person is responsible for: the team they belong to PLUS
+     every team they are set as MANAGER of. A single person can manage two (or
+     more) teams — each team record carries its own managerId — so this returns
+     a set, not a single id. */
+  managedTeamIds(){
+    const ids=new Set();
+    if(this.me&&this.me.teamUid)ids.add(this.me.teamUid);
+    (this.db.teams||[]).forEach(t=>{if(this.me&&t.managerId===this.me.id)ids.add(t.id);});
+    return ids;
+  },
+  /* Team scope with a graceful fallback. A manager sees members of ANY team
+     they manage (or belong to). When team wiring is still incomplete — no
+     teams set up, or the other person has no team yet — we fall back to the
+     department so lists never collapse to just yourself. Departments are always
+     a hard wall: nobody ever sees across departments. */
   inMyScope(u){
     if(!u)return false;
-    if(!this.me.teamUid||!u.teamUid)return deptOf(u)===this.dept();
-    return u.teamUid===this.me.teamUid;
+    if(u.id===this.me.id)return true;
+    if(deptOf(u)!==this.dept())return false;              // hard department wall
+    const managed=this.managedTeamIds();
+    if(managed.size&&u.teamUid)return managed.has(u.teamUid);  // strict team scope when both wired
+    return true;                                          // incomplete wiring → whole department
   },
   visPerson(u){
     if(!u)return false;
@@ -1731,21 +1744,20 @@ const App={
     if(this.can('admin'))return true;
     const k=this.roleKey();
     // A Discovery Manager sees their own routed/assigned work PLUS everything
-    // handled by their team (their discovery employees) — and nothing else.
+    // handled by any team they manage — and nothing else.
     if(k==='discovery_manager'){
       if(r.routedToManagerId===this.me.id||r.assigneeId===this.me.id||r.assignedById===this.me.id)return true;
-      const worker=this.user(r.assigneeId||r.assignedToId);
-      return !!worker&&deptOf(worker)==='discovery'&&this.inMyScope(worker);
+      return this.inMyScope(this.user(r.assigneeId||r.assignedToId));
     }
     if(k==='discovery_employee')return r.assigneeId===this.me.id; // assigned only
     // Sales/KAM EMPLOYEES see only their own.
     if(k==='sales_employee'||k==='kam_employee')
       return r.requesterId===this.me.id;
-    // Sales/KAM MANAGERS see their own AND every request raised by their team.
+    // Sales/KAM MANAGERS see their own AND every request raised by any team
+    // they manage (a person can manage more than one team).
     if(k==='sales_manager'||k==='kam_manager'){
       if(r.requesterId===this.me.id)return true;
-      const req=this.user(r.requesterId);
-      return !!req&&deptOf(req)===this.dept()&&this.inMyScope(req);
+      return this.inMyScope(this.user(r.requesterId));
     }
     return r.requesterId===this.me.id||r.assigneeId===this.me.id;
   },
