@@ -1712,24 +1712,31 @@ const App={
      every team they are set as MANAGER of. A single person can manage two (or
      more) teams — each team record carries its own managerId — so this returns
      a set, not a single id. */
-  managedTeamIds(){
+  /* Every team a person oversees. If an admin has explicitly set the list
+     (perms.__mgTeams, via People & Access → Manager oversight) that list is
+     authoritative; otherwise we fall back to the teams whose managerId is them.
+     Their own team is always included. Works for any user, defaulting to me. */
+  managedTeamIds(u){
+    u=u||this.me;if(!u)return new Set();
     const ids=new Set();
-    if(this.me&&this.me.teamUid)ids.add(this.me.teamUid);
-    (this.db.teams||[]).forEach(t=>{if(this.me&&t.managerId===this.me.id)ids.add(t.id);});
+    if(u.teamUid)ids.add(u.teamUid);
+    const ex=u.perms&&u.perms.__mgTeams;
+    if(Array.isArray(ex))ex.forEach(id=>ids.add(id));
+    else (this.db.teams||[]).forEach(t=>{if(t.managerId===u.id)ids.add(t.id);});
     return ids;
   },
-  /* Team scope with a graceful fallback. A manager sees members of ANY team
-     they manage (or belong to). When team wiring is still incomplete — no
-     teams set up, or the other person has no team yet — we fall back to the
-     department so lists never collapse to just yourself. Departments are always
-     a hard wall: nobody ever sees across departments. */
+  /* Deterministic team scope. A manager sees members of any team they oversee,
+     plus anyone in the department who has no team yet (so nobody is stranded).
+     When no team wiring exists at all, falls back to the whole department.
+     Departments are always a hard wall: nobody sees across departments. */
   inMyScope(u){
     if(!u)return false;
     if(u.id===this.me.id)return true;
     if(deptOf(u)!==this.dept())return false;              // hard department wall
     const managed=this.managedTeamIds();
-    if(managed.size&&u.teamUid)return managed.has(u.teamUid);  // strict team scope when both wired
-    return true;                                          // incomplete wiring → whole department
+    if(!managed.size)return true;                         // no wiring at all → whole department
+    if(!u.teamUid)return true;                            // unassigned people are visible to any manager
+    return managed.has(u.teamUid);                        // otherwise must be a team I oversee
   },
   /* -------- CONFIGURABLE VISIBILITY --------
      Every person has a "sees" scope over OTHER people's work:
@@ -4865,7 +4872,7 @@ const App={
   visibilityPanel(){
     const active=this.db.users.filter(u=>u.status==='active').sort((a,b)=>DEPTS.findIndex(d=>d[0]===deptOf(a))-DEPTS.findIndex(d=>d[0]===deptOf(b))||a.name.localeCompare(b.name));
     const opts=[['auto','Auto (role default)'],['own','Own work only'],['team','Their team(s)'],['dept','Whole department'],['all','Everything']];
-    const teamsOf=u=>{const own=this.team(u.teamUid),mng=(this.db.teams||[]).filter(t=>t.managerId===u.id);const names=new Set();if(own)names.add(own.name);mng.forEach(t=>names.add(t.name));return [...names].join(', ')||'—';};
+    const teamsOf=u=>{const names=[...this.managedTeamIds(u)].map(id=>(this.team(id)||{}).name).filter(Boolean);return names.join(', ')||'—';};
     const summary=u=>{const s=this.visScopeOf(u);const d=DEPTS.find(x=>x[0]===deptOf(u));const dn=d?d[1]:deptOf(u);
       if(s==='all')return 'Sees <b>every</b> request & enquiry across all departments';
       if(s==='dept')return `Sees the whole <b>${esc(dn)}</b> department's work`;
@@ -4879,9 +4886,27 @@ const App={
         <td>${u.locked?`<span class="cellsub">Everything (owner)</span>`:`<select class="mini-select" onchange="App.setVisScope('${u.id}',this.value)">${opts.map(([k,l])=>`<option value="${k}" ${cur===k?'selected':''}>${l}${k==='auto'?' · '+this.visScopeLabel(this.visScopeOf({...u,perms:{...(u.perms||{}),__visScope:undefined}})):''}</option>`).join('')}</select>`}</td>
         <td class="cellsub" style="max-width:280px;white-space:normal">${summary(u)}</td>
       </tr>`;};
+    // ---- Manager oversight: explicitly pick which teams each manager sees ----
+    const mgrs=active.filter(u=>isMgr(u)&&!u.locked);
+    const mgrRow=u=>{const managed=this.managedTeamIds(u);const teams=(this.db.teams||[]).filter(t=>t.department===deptOf(u));
+      const chips=teams.length?teams.map(t=>{const own=t.id===u.teamUid;return `<button class="pchip ${managed.has(t.id)?'on':''}" ${own?'disabled title="Their own team — always visible"':`onclick="App.toggleMgTeam('${u.id}','${t.id}')"`}>${esc(t.name)}${own?' · own':''}</button>`;}).join(' '):`<span class="cellsub">No teams in this department yet — create one in the Teams panel above.</span>`;
+      return `<tr><td><div class="who"><span class="avatar av">${initials(u.name)}</span><div><div class="nm">${esc(u.name)}</div><div class="cellsub">${esc(this.roleLabel(u))}</div></div></div></td><td style="white-space:normal">${chips}</td></tr>`;};
     return `<div class="sec-t">Who can see whose work <span class="cellsub" style="text-transform:none;letter-spacing:0">— visibility & oversight</span></div>
       <div class="notice" style="margin-bottom:10px">${svg(IC.people,15)}<div>Control what each person can see of <b>other people's</b> requests & enquiries. <b>Departments are a wall</b> — nobody sees another department unless you set them to <b>Everything</b>. Managers default to <b>their team(s)</b>; employees to <b>their own</b>. Change anyone below.</div></div>
-      <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Person</th><th>Department</th><th>Team(s)</th><th style="width:180px">Can see</th><th>What that means</th></tr></thead><tbody>${active.map(row).join('')}</tbody></table></div>`;
+      <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Person</th><th>Department</th><th>Team(s)</th><th style="width:180px">Can see</th><th>What that means</th></tr></thead><tbody>${active.map(row).join('')}</tbody></table></div>
+      ${mgrs.length?`<div class="sec-t" style="margin-top:18px">Manager oversight <span class="cellsub" style="text-transform:none;letter-spacing:0">— which teams each manager can see</span></div>
+      <div class="notice" style="margin-bottom:10px">${svg(IC.people,15)}<div>Tick the teams each manager oversees. This is what fixes a manager not seeing a team's <b>requests, enquiries and discovery</b> work. A manager can oversee <b>more than one team</b>. Their own team is always included. (For this to work, put each member on a team in the panel above.)</div></div>
+      <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th style="width:220px">Manager</th><th>Teams they oversee — click to toggle</th></tr></thead><tbody>${mgrs.map(mgrRow).join('')}</tbody></table></div>`:''}`;
+  },
+  async toggleMgTeam(uid,teamId){
+    const u=this.user(uid);if(!u)return;
+    u.perms=u.perms||{};
+    if(!Array.isArray(u.perms.__mgTeams))u.perms.__mgTeams=(this.db.teams||[]).filter(t=>t.managerId===u.id).map(t=>t.id);
+    const s=new Set(u.perms.__mgTeams);
+    if(s.has(teamId))s.delete(teamId);else s.add(teamId);
+    u.perms.__mgTeams=[...s];
+    if(CLOUD){this._lastLocalSave=Date.now();try{const {data,error}=await SB.from('profiles').update({perms:u.perms}).eq('id',uid).select('id');if(error)throw error;if(!data||!data.length)return this.adminBlocked();}catch(e){console.error(e);return this.toast('Update failed: '+(e.message||e),'err');}}else{await this.save('users');}
+    this.toast(`${u.name} oversees ${this.managedTeamIds(u).size} team${this.managedTeamIds(u).size!==1?'s':''}`,'ok');this.vUsers();
   },
   async setUser(id,status){const u=this.user(id);if(u.locked&&status!=='active')return this.toast('The permanent admin can\'t be disabled','err');if(status!=='active'&&this.effPerms(u).admin&&this.liveAdmins().length<=1)return this.toast('You can\'t disable the last admin','err');u.status=status;if(CLOUD){this._lastLocalSave=Date.now();try{const {data,error}=await SB.from('profiles').update({status}).eq('id',id).select('id');if(error)throw error;if(!data||!data.length){u.status=(status==='active'?'pending':u.status);return this.adminBlocked();}}catch(e){console.error(e);return this.toast('Update failed: '+(e.message||e),'err');}}else{await this.save('users');}if(status==='active')await this.notify(id,'Account approved ✅','Your DiscoverDesk access is now active. Welcome aboard.','approve',{pref:'account',subject:'[DiscoverDesk] Access approved',body:'Your account has been approved — you can now sign in.'});this.toast(status==='active'?'Account approved':status==='disabled'?'Account disabled':'Updated','ok');this.renderNav();this.vUsers();},
   adminBlocked(){this.modal(`<div class="mhead"><div><h3>Database didn't allow that</h3><p>Your login isn't recognised as an admin in Supabase</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div><div class="mbody"><div class="notice" style="background:var(--danger-soft);border-color:#f5cccc;color:#b3282d">${svg(IC.bolt,16)}<div>The change was blocked by row-level security because your profile row isn't marked <b>admin+active</b> in the database (this happens if the SQL was run after you first signed up).</div></div><p style="margin:14px 0 6px;font-weight:600">One-time fix — run this in Supabase → SQL editor:</p><pre style="background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:12px;font-family:var(--mono);font-size:12px;white-space:pre-wrap">update public.profiles
