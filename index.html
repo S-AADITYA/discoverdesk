@@ -5255,26 +5255,47 @@ Object.assign(App,{
     this.toast(`Round ${nrd.round} opened`,'ok');this.renderNav();this.openReq(id);
   },
 
+  _pad2(n){return String(n).padStart(2,'0');},
+  // count-UP: working hours elapsed since discovery started
   discTimerHTML(r){
     if(!r.discoveryStartedAt)return '<span class="cellsub">not started</span>';
     const end=r.discoveryEndedAt||now();
     const ms=workMsBetween(r.discoveryStartedAt,end);   // count only working hours (10:00–19:00) — freezes off-hours
     const h=Math.floor(ms/36e5),m=Math.floor(ms%36e5/6e4),s=Math.floor(ms%6e4/1000);
-    const pad=n=>String(n).padStart(2,'0');
+    const pad=this._pad2;
     const paused=!r.discoveryEndedAt&&!inWorkHours(now());
     const cls=r.discoveryEndedAt?'done':paused?'paused':'live';
     const clock=`<span class="disc-timer ${cls}">${pad(h)}:${pad(m)}:${pad(s)}</span>`;
     if(paused)return clock+` <span class="cellsub" title="Working hours are 10:00–19:00 — the clock is paused">⏸ off-hours · resumes ${fmtDT(nextWorkStart(now()))}</span>`;
     return clock;
   },
+  // count-DOWN (reverse): working hours remaining until the deadline
+  discCountdownHTML(r){
+    if(!r.deadline)return '<span class="cellsub">no deadline set</span>';
+    if(r.discoveryEndedAt)return '<span class="badge b-approved">Delivered</span>';
+    const pad=this._pad2;
+    if(now()>=r.deadline){
+      const late=workMsBetween(r.deadline,now());const h=Math.floor(late/36e5),m=Math.floor(late%36e5/6e4);
+      return `<span class="disc-timer over">-${pad(h)}:${pad(m)}:00</span> <span class="cellsub" style="color:var(--danger)">overdue</span>`;
+    }
+    const ms=workMsBetween(now(),r.deadline);           // working-hours remaining
+    const h=Math.floor(ms/36e5),m=Math.floor(ms%36e5/6e4),s=Math.floor(ms%6e4/1000);
+    const paused=!inWorkHours(now());
+    const cls=paused?'paused':(ms<2*36e5?'over':'live');  // last 2 working hours flash red
+    const clock=`<span class="disc-timer ${cls}">${pad(h)}:${pad(m)}:${pad(s)}</span>`;
+    if(paused)return clock+` <span class="cellsub" title="Working hours 10:00–19:00 — paused">⏸ off-hours · resumes ${fmtDT(nextWorkStart(now()))}</span>`;
+    return clock+' <span class="cellsub">left to deadline</span>';
+  },
+  discClockHTML(r){return this._discReverse?this.discCountdownHTML(r):this.discTimerHTML(r);},
   startDiscTick(id){
     clearInterval(this._discT);
-    const r=this.req(id);if(!r||!this.discRunning(r))return;
+    const r=this.req(id);if(!r||(!this.discRunning(r)&&!this._discReverse))return;
     this._discT=setInterval(()=>{
       const el=document.getElementById('discTimer');
       if(!el){clearInterval(this._discT);return;}
-      const rr=this.req(id);if(!rr||!this.discRunning(rr)){clearInterval(this._discT);return;}
-      el.innerHTML=this.discTimerHTML(rr);
+      const rr=this.req(id);if(!rr){clearInterval(this._discT);return;}
+      if(!this.discRunning(rr)&&!this._discReverse){clearInterval(this._discT);return;}
+      el.innerHTML=this.discClockHTML(rr);
     },1000);
   },
 
@@ -5610,9 +5631,9 @@ Object.assign(App,{
     /* ---- discovery control strip ---- */
     const ctrl=`<div class="disc-strip ${running?'on':''}">
       <div class="dsl">
-        <div class="dsk">Discovery clock</div>
-        <div class="dsv" id="discTimer">${this.discTimerHTML(r)}</div>
-        <div class="cellsub">${r.discoveryStartedAt?`started ${fmtDT(r.discoveryStartedAt)} by ${esc(this.user(r.discoveryStartedBy)?.name||'—')}`:'not started yet'}${r.discoveryEndedAt?` · ended ${fmtDT(r.discoveryEndedAt)}`:''}</div>
+        <div class="dsk">${this._discReverse?'Time left to deadline':'Discovery clock'} <button class="btn ghost xs" style="margin-left:6px;padding:2px 7px" title="Switch between elapsed and countdown" onclick="App._discReverse=!App._discReverse;App.openReq('${r.id}')">${this._discReverse?'⏱ Elapsed':'⏳ Countdown'}</button></div>
+        <div class="dsv" id="discTimer">${this.discClockHTML(r)}</div>
+        <div class="cellsub">${r.discoveryStartedAt?`started ${fmtDT(r.discoveryStartedAt)} by ${esc(this.user(r.discoveryStartedBy)?.name||'—')}`:'not started yet'}${r.discoveryEndedAt?` · ended ${fmtDT(r.discoveryEndedAt)}`:''}${r.deadline?` · deadline ${fmtDT(r.deadline)}`:''}</div>
       </div>
       <div class="dsr">
         ${!r.campaignId?(this.isRequester(r)?`<button class="btn sm" onclick="App.setCampaign('${r.id}')">${svg(IC.plus,15)} Set campaign first</button>`:`<span class="cellsub">No campaign set on this request yet</span>`):''}
@@ -5648,11 +5669,12 @@ Object.assign(App,{
       <div class="dt-title">${esc(r.brandName)} <span class="campchip big">${esc(campNm||'no campaign')}</span></div>
       <div class="dt-sub">${esc(r.niche)} · ${r.reqType==='sample'?'Sample round '+(r.sampleRound||r.round||1):'Campaign · sample round '+(r.sampleRound||r.round||1)}${r.brandType?' · '+esc(r.brandType):''}${(r.creatorsPerVideo>1)?' · '+r.creatorsPerVideo+' creators/video':''}</div>
       ${this.flags(r).length?`<div class="notice" style="margin-top:10px;background:var(--danger-soft);border-color:#f5cccc;color:#b3282d"><span class="alertdot" style="width:9px;height:9px;border-radius:50%;flex:none;margin-top:4px"></span><div style="flex:1"><b>Red flags:</b> ${this.flags(r).join(' · ')}</div>${this.respPeople(r).length?`<button class="btn danger xs" onclick="App.remindResponsible('${r.id}')">${svg(IC.bell,13)} Remind responsible</button>`:''}</div>`:''}
-      <div class="actbar" style="margin-top:10px">${['low','med','high'].map(p=>`<button class="btn ${r.priority===p||(!r.priority&&p==='med')?'primary':'ghost'} xs" onclick="App.setPriority('${r.id}','${p}')">${p[0].toUpperCase()+p.slice(1)}</button>`).join('')}<span class="cellsub" style="align-self:center;margin-left:4px">priority</span><span style="flex:1"></span><button class="btn ghost xs" title="Copy this request's summary to the clipboard" onclick="App.copyReqSummary('${r.id}')">${svg(IC.copy||IC.report,14)} Copy summary</button></div></div>
+      <div class="actbar" style="margin-top:10px">${['low','med','high'].map(p=>`<button class="btn ${r.priority===p||(!r.priority&&p==='med')?'primary':'ghost'} xs" onclick="App.setPriority('${r.id}','${p}')">${p[0].toUpperCase()+p.slice(1)}</button>`).join('')}<span class="cellsub" style="align-self:center;margin-left:4px">priority</span><span style="flex:1"></span>${(this.dept()==='sales'||this.dept()==='kam')?`<button class="btn ghost xs" style="color:var(--danger)" title="Escalate this request to your manager" onclick="App.flagToManager('${r.id}')">${svg(IC.bolt,14)} Flag to manager</button>`:''}<button class="btn ghost xs" title="Copy this request's summary to the clipboard" onclick="App.copyReqSummary('${r.id}')">${svg(IC.copy||IC.report,14)} Copy summary</button></div></div>
       <div class="mbody">${pipe}
         ${ctrl}
         <div class="specgrid">${spec('Campaign',esc(campNm||'—'))}${(r.brandWebsite||(this.brand(r.brandId)||{}).website)?spec('Website',(()=>{const w=r.brandWebsite||this.brand(r.brandId).website;return `<a href="${esc(w)}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:600;text-decoration:none">${esc(w.replace(/^https?:\/\//,''))} ↗</a>`;})()):''}${spec('Requested by',this.user(r.requesterId)?.name||'—')}${spec('Assigned to',r.assigneeId?this.user(r.assigneeId).name:'<span class="unassigned">Unassigned</span>')}${spec('Selection rounds',r.rounds.length||0)}${spec('Followers',nfmt(r.fMin)+' – '+nfmt(r.fMax))}${spec('Creator type',esc(r.pType||'—'))}${spec('Platform',esc(r.platform||'—'))}${spec('Profiles needed',r.qty||'—')}${spec('Deadline',this.deadlineCell(r)+' '+this.slaChip(r))}${spec('Time in stage',this.agoStr(this.stageSince(r)))}${spec('Turnaround',tat!=null?fmtDur(tat):'in progress')}${r.brandBudget?spec('Brand budget',`₹${nfmt(r.brandBudget)}`):''}${(this.can('bridge')&&r.internalCost)?spec('Internal cost',`₹${nfmt(r.internalCost)}`):''}${(this.can('bridge')&&r.brandBudget&&r.internalCost)?spec('Est. margin',`<span style="color:${r.brandBudget-r.internalCost>=0?'var(--success)':'var(--danger)'}">₹${nfmt(r.brandBudget-r.internalCost)} (${Math.round((r.brandBudget-r.internalCost)/r.brandBudget*100)}%)</span>`):''}${r.sample?spec('Sample ref',linkify(r.sample)):''}</div>
         ${r.notes?`<div class="notice">${svg(IC.bolt,16)}<div>${linkify(r.notes)}</div></div>`:''}
+        ${this.reqDocsHTML(r)}
         ${(r.suggestedCreators&&r.suggestedCreators.length)?`<div class="sec-t">Client-requested creators <span class="cellsub">(${r.suggestedCreators.length})</span></div><div class="card pad" style="margin-bottom:14px;background:var(--surface-2)"><div class="cellsub" style="margin-bottom:8px">Pre-picked by ${esc(this.user(r.requesterId)?.name||'Sales/KAM')}.${openRd?' <b>Push them into the open round →</b>':''}</div>${r.suggestedCreators.map(sc=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line-2)"><div><b style="font-size:13px">${esc(sc.name||('@'+sc.handle))}</b> <span class="cellsub">${nfmt(sc.followers||0)} · ${esc(sc.cats||sc.category||'—')}</span></div><div style="display:flex;gap:6px;align-items:center"><span class="cellsub">${esc(sc.reason||'')} · ${esc(sc.addedByName||'—')}</span>${(openRd&&this.canFillRound(r))?`<button class="btn ghost xs" onclick="App.roundAdd('${r.id}','${esc(sc.handle)}','client-requested','Client requested').then(()=>App.openReq('${r.id}'))">→ Round ${openRd.round}</button>`:''}</div></div>`).join('')}</div>`:''}
         ${!r.assigneeId&&r.status!=='draft'&&(this.can('assign')||(r.requesterId===this.me.id&&!r.routedToManagerId))?(()=>{const tgt=this.assignTargets();return tgt.length?`<div class="sec-t">Assign discovery</div><div class="cellsub" style="margin:-4px 0 8px">${this.assignHint()}</div><div style="display:flex;gap:8px"><select class="mini-select" id="assignSel" style="flex:1">${tgt.map(u=>`<option value="${u.id}">${esc(u.name)}${u.id===this.me.id?' (you)':''} · ${ROLES[roleKey(u)]}</option>`).join('')}</select><button class="btn primary sm" onclick="App.assignReq('${r.id}')">Assign</button></div>`:`<div class="sec-t">Assign discovery</div><div class="notice" style="font-size:12px">${svg(IC.bolt,13)}<div>No eligible people to assign to yet.</div></div>`;})():''}
         ${r.status==='draft'&&r.requesterId===this.me.id?`<div class="actbar"><button class="btn primary sm" onclick="App.publishDraft('${r.id}')">${svg(IC.up,15)} Publish request</button></div>`:''}
@@ -5691,6 +5713,76 @@ Object.assign(App,{
     return L.join('\n');
   },
   copyReqSummary(id){const r=this.req(id);if(!r)return;this.copyText(this.reqSummaryText(r));},
+
+  /* Sales / KAM escalation: raise a flag to your manager when a request isn't
+     moving. Notifies the manager(s) of the requester's team + the department
+     head(s), logs it on the request, and marks it escalated. */
+  managersFor(u){
+    if(!u)return [];
+    const ids=new Set();
+    (this.db.teams||[]).forEach(t=>{if(t.id===u.teamUid&&t.managerId)ids.add(t.managerId);});
+    this.db.users.filter(x=>x.status==='active'&&isMgr(x)&&deptOf(x)===deptOf(u)).forEach(x=>ids.add(x.id));
+    ids.delete(u.id);
+    return [...ids];
+  },
+  async flagToManager(id){
+    const r=this.req(id);if(!r)return;
+    if(!(this.dept()==='sales'||this.dept()==='kam'))return this.toast('Only Sales/KAM can escalate to their manager.','err');
+    const mgrs=this.managersFor(this.me);
+    if(!mgrs.length)return this.toast('No manager is set for your team yet — ask an admin to assign one in People & Access.','err');
+    const why=(prompt('What isn’t happening properly? This goes to your manager:','')||'').trim();
+    if(!why)return;
+    const campNm=this.campName(r.campaignId)||r.campaignName||'—';
+    r.escalations=r.escalations||[];
+    r.escalations.push({by:this.me.id,at:now(),why});
+    r.escalated=true;r.updatedAt=now();
+    this.pushEvent(r,`⚑ Escalated to manager by ${this.me.name}: ${why}`,'reject');
+    for(const mid of mgrs){
+      await this.notify(mid,`⚑ ${this.me.name} escalated ${r.id}`,`${r.brandName} · ${campNm} — ${why}`,'reject',{pref:'assigned',subject:`[DiscoverDesk] Escalation: ${r.id}`,body:`${this.me.name} raised a flag on ${r.id} (${r.brandName} · ${campNm}):\n"${why}"\n\nStatus: ${r.status} · Assigned to: ${r.assigneeId?this.user(r.assigneeId).name:'nobody yet'} · Deadline: ${r.deadline?fmtDT(r.deadline):'TBD'}.\n\nPlease follow up.`});
+    }
+    this.audit('req.escalate','req:'+r.id,{name:r.brandName,campaign:campNm,field:why});
+    await this.save('reqs');this.syncActsLocal();await this.save('acts');
+    this.toast(`Flag raised to ${mgrs.length===1?'your manager':mgrs.length+' managers'} ⚑`,'ok');this.openReq(id);
+  },
+
+  /* ---- request attachments (briefs / reference PDFs for discovery) ---- */
+  reqDocsHTML(r){
+    const docs=r.attachments||[];
+    const canEdit=this.isRequester(r)||this.can('assign')||this.can('admin')||r.assigneeId===this.me.id;
+    return `<div class="sec-t">Brief & reference files ${docs.length?`<span class="badge b-draft" style="text-transform:none">${docs.length}</span>`:''}</div>
+      <div class="card pad" style="margin-bottom:14px">
+        <div class="cellsub" style="margin-bottom:${docs.length?'10px':'8px'}">Attach a brief or reference <b>PDF</b> here so Discovery can open it while sourcing creators.</div>
+        ${docs.length?`<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:10px">${docs.map((d,i)=>`<div style="display:flex;align-items:center;gap:10px;padding:9px 11px;border:1px solid var(--line);border-radius:10px">${svg(IC.report,16)}<a href="${d.data}" target="_blank" rel="noopener" ${d.name?`download="${esc(d.name)}"`:''} style="flex:1;min-width:0;font-weight:600;color:var(--primary);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(d.name||'document.pdf')} ↗</a><span class="cellsub">${d.size?Math.round(d.size/1024)+' KB · ':''}${esc(this.user(d.by)?.name||'')}</span>${(canEdit)?`<button class="xbtn" title="Remove" onclick="App.removeDoc('${r.id}',${i})">${svg(IC.x,12)}</button>`:''}</div>`).join('')}</div>`:''}
+        ${canEdit?`<label class="btn ghost sm" style="cursor:pointer">${svg(IC.up,14)} Attach PDF<input type="file" accept="application/pdf,.pdf" style="display:none" onchange="App.attachDoc('${r.id}',event)"></label>`:(docs.length?'':'<div class="cellsub">No files attached yet.</div>')}
+      </div>`;
+  },
+  attachDoc(id,ev){
+    const r=this.req(id);if(!r)return;
+    const f=ev.target&&ev.target.files&&ev.target.files[0];if(!f)return;
+    if(f.type!=='application/pdf'&&!/\.pdf$/i.test(f.name))return this.toast('Please attach a PDF file','err');
+    if(f.size>5*1024*1024)return this.toast('PDF is too large — keep it under 5 MB','err');
+    const reader=new FileReader();
+    reader.onload=async e=>{
+      r.attachments=r.attachments||[];
+      r.attachments.push({name:f.name,size:f.size,type:f.type||'application/pdf',data:e.target.result,by:this.me.id,at:now()});
+      r.updatedAt=now();
+      this.pushEvent(r,`Attached brief "${f.name}"`,'info');
+      await this.save('reqs');this.syncActsLocal();await this.save('acts');
+      if(r.assigneeId&&r.assigneeId!==this.me.id)this.notify(r.assigneeId,'New brief attached',`${r.id} · ${r.brandName} — "${f.name}"`,'info',null);
+      this.toast('PDF attached','ok');this.openReq(id);
+    };
+    reader.onerror=()=>this.toast('Could not read that file','err');
+    reader.readAsDataURL(f);
+  },
+  async removeDoc(id,i){
+    const r=this.req(id);if(!r||!r.attachments)return;
+    const d=r.attachments[i];if(!d)return;
+    if(!(this.isRequester(r)||this.can('admin')||d.by===this.me.id))return this.toast('You can only remove files you attached.','err');
+    r.attachments.splice(i,1);r.updatedAt=now();
+    this.pushEvent(r,`Removed brief "${d.name||'file'}"`,'info');
+    await this.save('reqs');this.syncActsLocal();await this.save('acts');
+    this.toast('Removed','ok');this.openReq(id);
+  },
 
   /* pull the campaign pool straight into the open round */
   poolIntoRound(reqId){
