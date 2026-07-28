@@ -1515,7 +1515,8 @@ const App={
   renderThemeBtn(){const b=document.getElementById('themeBtn');if(b)b.innerHTML=svg(document.body.classList.contains('dark')?IC.sun:IC.moon,18);},
   async toggleTheme(){const dark=!document.body.classList.contains('dark');document.body.classList.toggle('dark',dark);await store.pset('dd:theme',dark?'dark':'light');this.renderThemeBtn();},
   async manualRefresh(){await this.load();this.renderNav();this.refreshBell();this.go(this.view);this.toast('Refreshed','ok');},
-  startClock(){if(this._clock)return;this._clock=setInterval(()=>{if(this.view==='dashboard'&&!document.getElementById('modal').classList.contains('on')&&!document.getElementById('drawer').classList.contains('on'))this.tickLive();},15000);},
+  startClock(){if(this._clock)return;this._clock=setInterval(()=>{if(this.view==='dashboard'&&!document.getElementById('modal').classList.contains('on')&&!document.getElementById('drawer').classList.contains('on'))this.tickLive();},15000);
+    if(!this._flagSweep){this._flagSweep=setInterval(()=>this.sweepFlags().catch(()=>{}),90000);setTimeout(()=>this.sweepFlags().catch(()=>{}),4000);}},
   tickLive(){const t=document.getElementById('liveTicker');if(t)t.innerHTML=this.tickerHTML();const s=document.getElementById('liveAgo');if(s)s.textContent='just now';},
   // live tracking helpers
   stageSince(r){const map={assigned:r.assignedAt,in_progress:r.startedAt,under_review:r.submittedAt,rejected:r.updatedAt,submitted:r.submittedAt};return map[r.status]||r.updatedAt||r.createdAt;},
@@ -1573,6 +1574,33 @@ const App={
     let tot=0;for(const r of flagged)tot+=await this.remindResponsible(r.id,true);
     await this.save('reqs');this.syncActsLocal();await this.save('acts');this.renderNav();
     this.closeAll();this.toast(`Reminders sent for ${flagged.length} flagged request${flagged.length!==1?'s':''}`,'ok');
+  },
+  /* AUTOMATIC flag alerts. Runs on managers'/admin clients so a request that
+     newly trips a red flag (overdue, stalled, 2+ rejections, unassigned…)
+     pings everyone responsible exactly once per distinct flag state. The
+     per-request `flagNotifiedSig` marker (persisted) dedupes across sessions. */
+  async sweepFlags(){
+    if(!this.me||!Array.isArray(this.db.reqs))return;
+    if(!(this.can('admin')||isMgr(this.me)))return;   // only oversight roles run the sweep
+    let changed=false;
+    for(const r of this.db.reqs){
+      if(r.deletedAt)continue;
+      const f=this.flags(r);const sig=f.join('|');
+      if(f.length){
+        if(r.flagNotifiedSig!==sig){
+          r.flagNotifiedSig=sig;changed=true;
+          const people=new Set([r.requesterId,r.assigneeId,r.assignedToId,r.routedToManagerId].filter(Boolean));
+          this.db.users.filter(u=>u.status==='active'&&roleKey(u)==='discovery_manager').forEach(u=>people.add(u.id));
+          const rq=this.user(r.requesterId);
+          if(rq)this.db.users.filter(u=>u.status==='active'&&isMgr(u)&&deptOf(u)===deptOf(rq)).forEach(u=>people.add(u.id));
+          const campNm=this.campName(r.campaignId)||r.campaignName||'—';
+          for(const pid of people){
+            await this.notify(pid,`⚠ ${r.id} flagged`,`${r.brandName} · ${campNm} — ${f.join(', ')}.`,'reject',{pref:'assigned',subject:`[DiscoverDesk] Flagged: ${r.id}`,body:`${r.id} (${r.brandName} · ${campNm}) is now flagged: ${f.join(', ')}.\nDeadline: ${r.deadline?fmtDT(r.deadline):'TBD'}.\nRaised by ${this.user(r.requesterId)?.name||'—'} · assigned to ${r.assigneeId?this.user(r.assigneeId).name:'nobody yet'}.\n\nThis is an automatic alert — please action it.`});
+          }
+        }
+      }else if(r.flagNotifiedSig){r.flagNotifiedSig=null;changed=true;}
+    }
+    if(changed){await this.save('reqs');this.refreshBell();}
   },
   async addComment(id){
     const inp=document.getElementById('cmt_'+id);const tx=inp.value.trim();if(!tx)return;
@@ -1702,8 +1730,13 @@ const App={
     if(!r)return false;
     if(this.can('admin'))return true;
     const k=this.roleKey();
-    // A Discovery Manager sees ONLY the requests routed/assigned to THEM (not all).
-    if(k==='discovery_manager')return r.routedToManagerId===this.me.id||r.assigneeId===this.me.id||r.assignedById===this.me.id;
+    // A Discovery Manager sees their own routed/assigned work PLUS everything
+    // handled by their team (their discovery employees) — and nothing else.
+    if(k==='discovery_manager'){
+      if(r.routedToManagerId===this.me.id||r.assigneeId===this.me.id||r.assignedById===this.me.id)return true;
+      const worker=this.user(r.assigneeId||r.assignedToId);
+      return !!worker&&deptOf(worker)==='discovery'&&this.inMyScope(worker);
+    }
     if(k==='discovery_employee')return r.assigneeId===this.me.id; // assigned only
     // Sales/KAM EMPLOYEES see only their own.
     if(k==='sales_employee'||k==='kam_employee')
@@ -2535,7 +2568,7 @@ const App={
     if(k==='discovery_manager')return 'As a Discovery Manager you route this to a Discovery Employee — or assign it to yourself.';
     return 'Pick who delivers this brief.';
   },
-  async assignReq(id){const r=this.req(id);const who=document.getElementById('assignSel').value;const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');this.recordHop(r,who);this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');await this.notify(who,'Request assigned to you',`${r.id} · ${r.brandName}`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned ${r.id}`,body:`You've been assigned ${r.id} (${r.brandName}).`});await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Assigned','ok');this.renderNav();this.openReq(id);},
+  async assignReq(id){const r=this.req(id);const who=document.getElementById('assignSel').value;const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');this.recordHop(r,who);if(this.dept()==='sales'||this.dept()==='kam')this.autoStartClock(r,this.me.id);this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');await this.notify(who,'Request assigned to you',`${r.id} · ${r.brandName}${r.discoveryStartedAt?' — discovery clock started':''}`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned ${r.id}`,body:`You've been assigned ${r.id} (${r.brandName}).${r.discoveryStartedAt?' The discovery clock has started — add creators and submit each round.':''}`});await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Assigned','ok');this.renderNav();this.openReq(id);},
   async publishDraft(id){const r=this.req(id);r.status='assigned';this.pushEvent(r,'Request published','create');await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Published','ok');this.renderNav();this.openReq(id);},
   async startWork(id){const r=this.req(id);r.status='in_progress';r.startedAt=now();this.pushEvent(r,'Started discovery','info');await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Marked in discovery','ok');this.openReq(id);},
   wireDrop(id){const dz=document.getElementById('dropZone');if(!dz)return;['dragover','dragenter'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.add('drag');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.remove('drag');}));dz.addEventListener('drop',ev=>{const f=ev.dataTransfer.files[0];if(f)this.parseSheet(f,id);});},
@@ -2563,9 +2596,10 @@ const App={
 
   /* ================= DISCOVERY ================= */
   vDiscovery(){
-    // A Discovery Manager sees requests ROUTED to them (to assign an employee),
-    // plus anything assigned to them; admin sees all assigned.
-    const mine=this.db.reqs.filter(r=>r.assigneeId===this.me.id||(this.roleKey()==='discovery_manager'&&(r.routedToManagerId===this.me.id||r.assigneeId))||(this.can('admin')&&r.assigneeId));
+    // Scope comes from visReq: an employee sees only their own assigned work; a
+    // Discovery Manager sees their whole team's discovery work (and nothing else);
+    // admin sees all. We then keep only requests that have entered discovery.
+    const mine=this.db.reqs.filter(r=>!r.deletedAt&&this.visReq(r)&&(r.assigneeId||r.assignedToId||r.routedToManagerId||r.discoveryStartedAt));
     let active=mine.filter(r=>['assigned','in_progress','rejected'].includes(r.status));
     const waiting=mine.filter(r=>r.status==='under_review'),done=mine.filter(r=>r.status==='approved');
     const df=this._dfilter||'all';
@@ -5085,6 +5119,18 @@ Object.assign(App,{
     r.rounds.push(rd);return rd;
   },
 
+  /* Auto-start the discovery clock the moment Sales/KAM route a request to a
+     Discovery Manager. Only Sales/KAM can still END discovery (canClock). */
+  autoStartClock(r,byId){
+    if(!r||r.discoveryStartedAt||r.discoveryEndedAt||!r.campaignId)return false;
+    r.discoveryStartedAt=now();r.discoveryEndedAt=null;r.discoveryStartedBy=byId||r.requesterId;r.closed=false;
+    if(r.status==='assigned'||r.status==='draft')r.status='in_progress';
+    r.startedAt=r.startedAt||now();
+    if(!this.openRound(r)&&!this.submittedRound(r))this.newRound(r,'Discovery clock auto-started on assignment');
+    this.pushEvent(r,'Discovery clock auto-started on assignment to Discovery','info');
+    return true;
+  },
+
   async startDiscovery(id){
     const r=this.req(id);if(!r)return;
     if(!r.assigneeId)return this.toast('Assign this request to start the clock.','err');
@@ -5104,7 +5150,7 @@ Object.assign(App,{
 
   async endDiscovery(id){
     const r=this.req(id);if(!r)return;
-    if(!this.canClock(r))return this.toast('Only '+this.clockOwnerName(r)+' (or the Discovery Manager) can end discovery on this request.','err');
+    if(!this.canClock(r))return this.toast('Only '+this.clockOwnerName(r)+' — the Sales/KAM who raised this — can end discovery.','err');
     if(!this.discRunning(r))return this.toast('Discovery is not running','err');
     r.discoveryEndedBy=this.me.id;
     const sub=this.submittedRound(r);
@@ -5116,6 +5162,9 @@ Object.assign(App,{
     const mins=Math.round((r.discoveryEndedAt-r.discoveryStartedAt)/60000);
     this.pushEvent(r,`Discovery ended by ${this.me.name} — ${fmtDur(mins/60)} total, ${r.rounds.length} round(s)`,'approve');
     this.audit('req.discovery.end','req:'+r.id,{name:r.brandName,campaign:this.campName(r.campaignId),field:mins+' min'});
+    // All rounds complete → close the originating enquiry (won).
+    const enq=(this.db.enq||[]).find(e=>e.convertedRequestId===r.id&&!['won','lost'].includes(e.status));
+    if(enq){enq.status='won';enq.closedAt=now();await this.save('enq');}
     await this.save('reqs');this.syncActsLocal();await this.save('acts');
     if(r.assigneeId&&r.assigneeId!==this.me.id)await this.notify(r.assigneeId,'Discovery closed ✅',`${r.id} · ${r.brandName} — closed after ${r.rounds.length} round(s).`,'approve',{pref:'decision',subject:`[DiscoverDesk] Closed: ${r.id}`,body:`${this.me.name} closed discovery on ${r.id}.`});
     this.toast('Discovery closed ✅','ok');this.confetti();this.renderNav();this.openReq(id);
@@ -5465,7 +5514,9 @@ Object.assign(App,{
     this.audit('req.create','req:'+r.id,{name:brandName,campaign:campName});
     (r.suggestedCreators||[]).forEach(sc=>this.audit('req.suggest','req:'+r.id,{handle:sc.handle,name:sc.name,source:'sales-suggested',campaign:campName}));
     this._reqPicks=[];
-    if(!draft&&assignee){this.pushEvent(r,'Assigned to '+this.user(assignee).name,'assign');await this.notify(assignee,'New discovery request assigned',`${r.id} · ${brandName} — ${campName} — ${niche}. Due ${r.deadline?fmtDate(r.deadline):'soon'}.`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned: ${r.id} ${brandName}`,body:`You've been assigned ${r.id} (${brandName} · ${campName} — ${niche}).\nProfiles needed: ${r.qty}. Deadline: ${r.deadline?fmtDate(r.deadline):'TBD'}.\n\nThe requester will start discovery — the clock begins then.\n\n— ${this.me.name}`});}
+    // Sales/KAM raising & routing to a Discovery Manager auto-starts the clock.
+    if(!draft&&assignee&&isRaiser)this.autoStartClock(r,this.me.id);
+    if(!draft&&assignee){this.pushEvent(r,'Assigned to '+this.user(assignee).name,'assign');await this.notify(assignee,'New discovery request assigned',`${r.id} · ${brandName} — ${campName} — ${niche}. Due ${r.deadline?fmtDate(r.deadline):'soon'}.`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned: ${r.id} ${brandName}`,body:`You've been assigned ${r.id} (${brandName} · ${campName} — ${niche}).\nProfiles needed: ${r.qty}. Deadline: ${r.deadline?fmtDate(r.deadline):'TBD'}.\n\n${r.discoveryStartedAt?'The discovery clock has already started — add creators and submit each round.':'The requester will start discovery — the clock begins then.'}\n\n— ${this.me.name}`});}
     this.db.reqs.push(r);
     const c=this.camp(campId);if(c){c.reqIds=c.reqIds||[];if(!c.reqIds.includes(r.id))c.reqIds.push(r.id);await this.save('camps');}
     if(this._enqId){const e=this.db.enq.find(x=>x.id===this._enqId);if(e){e.brandId=brandId;e.campaignId=campId;e.convertedRequestId=r.id;e.status=['won','lost'].includes(e.status)?e.status:'proposal';await this.save('enq');}}
