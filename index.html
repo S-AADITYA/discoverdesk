@@ -660,6 +660,30 @@ body.dark .ptype.barter{background:#3a2410}
 .view-in .ccard:nth-child(9){animation-delay:.24s}
 @keyframes cardIn{from{opacity:0;transform:translateY(10px) scale(.99)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){.view-in,.view-in .kpi,.view-in .ccard,.view-in .card{animation:none}}
+/* ---- high-class micro-interactions ---- */
+.btn{transition:transform .12s cubic-bezier(.3,.7,.3,1),box-shadow .18s,background .18s,border-color .18s,color .18s}
+.btn:hover{transform:translateY(-1px)}
+.btn:active{transform:translateY(0) scale(.97)}
+.btn.primary:hover{box-shadow:0 10px 22px -8px var(--primary,#5847eb);filter:brightness(1.05)}
+.card{transition:transform .18s cubic-bezier(.3,.7,.3,1),box-shadow .22s,border-color .18s}
+.card.click:hover,.card.pad.click:hover,.card[onclick]:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg,0 18px 40px -18px rgba(20,20,40,.28))}
+.tbl tbody tr.click{transition:background .14s}
+.tbl tbody tr.click:hover{background:var(--primary-soft,rgba(88,71,235,.07))}
+.kpi{transition:transform .18s cubic-bezier(.3,.7,.3,1),box-shadow .22s}
+.kpi:hover{transform:translateY(-3px);box-shadow:var(--shadow-lg,0 18px 40px -18px rgba(20,20,40,.28))}
+.chip,.tag,.badge,.avatar{transition:transform .14s cubic-bezier(.3,.7,.3,1),background .16s,color .16s,border-color .16s}
+.chip:hover{transform:translateY(-1px)}
+.avatar:hover{transform:scale(1.06)}
+.xbtn{transition:transform .14s,background .16s,color .16s}.xbtn:hover{transform:rotate(90deg)}
+.disc-live .d{animation:blink 1.2s infinite}
+.disc-timer.live{animation:softglow 2.4s ease-in-out infinite}
+@keyframes softglow{0%,100%{opacity:1}50%{opacity:.78}}
+.dltimer.urgent,.dltimer.over{animation:blink 1.6s infinite}
+.hpill{transition:transform .14s cubic-bezier(.3,.7,.3,1)}.hpill:hover{transform:scale(1.08)}
+.inp{transition:border-color .16s,box-shadow .18s,background .16s}
+.inp:focus{box-shadow:0 0 0 4px var(--primary-soft,rgba(88,71,235,.12))}
+.toast{will-change:transform,opacity}
+@media (prefers-reduced-motion:reduce){.btn,.card,.kpi,.chip,.tag,.badge,.avatar,.xbtn,.disc-live .d,.disc-timer.live,.dltimer,.hpill{animation:none!important;transition:none!important;transform:none!important}}
 #splash{position:fixed;inset:0;background:var(--sidebar);display:grid;place-items:center;z-index:500;transition:opacity .5s,visibility .5s}
 #splash.hide{opacity:0;visibility:hidden}
 #splash .spwrap{display:flex;flex-direction:column;align-items:center;gap:14px;animation:sppop .7s cubic-bezier(.2,.8,.2,1)}
@@ -1505,7 +1529,7 @@ const App={
   },
   agoStr(ms){const s=Math.round((now()-ms)/1000);if(s<60)return s+'s ago';const m=Math.round(s/60);if(m<60)return m+'m ago';const h=Math.round(m/60);if(h<24)return h+'h ago';return Math.round(h/24)+'d ago';},
   /* ---- red flags & priority ---- */
-  flags(r){const f=[];if(r.status==='approved'||r.status==='draft')return f;if(r.deadline&&r.deadline<now())f.push('Overdue');const rej=r.rounds.filter(x=>x.decision==='rejected').length;if(rej>=2)f.push(rej+' rejections');if(r.status==='under_review'&&r.submittedAt&&(now()-r.submittedAt)>3*864e5)f.push('Review stalled');if(!r.assigneeId&&r.status!=='draft')f.push('Unassigned');if(r.priority==='high'&&r.status!=='approved'&&r.deadline&&r.deadline-now()<2*864e5)f.push('High-pri due soon');return f;},
+  flags(r){const f=[];if(!r||r.status==='approved'||r.status==='draft')return f;if(r.deadline&&r.deadline<now())f.push('Overdue');const rej=(r.rounds||[]).filter(x=>x.decision==='rejected').length;if(rej>=2)f.push(rej+' rejections');if(r.status==='under_review'&&r.submittedAt&&(now()-r.submittedAt)>3*864e5)f.push('Review stalled');if(!r.assigneeId&&r.status!=='draft')f.push('Unassigned');if(r.priority==='high'&&r.status!=='approved'&&r.deadline&&r.deadline-now()<2*864e5)f.push('High-pri due soon');return f;},
   flaggedReqs(){return this.db.reqs.filter(r=>this.flags(r).length);},
   redCount(){return this.flaggedReqs().length;},
   priBadge(p){p=p||'med';return `<span class="pri ${p}">${svg(IC.bolt,11)}${p[0].toUpperCase()+p.slice(1)}</span>`;},
@@ -1519,7 +1543,36 @@ const App={
         <div class="sec-t" style="margin-top:8px">${esc(b)} <span class="flag"><span class="d"></span>${list.length}</span></div>
         ${list.map(r=>`<div class="card pad" style="padding:12px;margin-bottom:8px;cursor:pointer" onclick="App.closeAll();App.openReq('${r.id}')"><div style="display:flex;justify-content:space-between;align-items:center"><div><div class="mono cellsub">${r.id}</div><div style="font-weight:600;font-size:13px">${esc(r.niche)}</div></div><div style="text-align:right"><div class="miniflags">${this.flags(r).map(f=>`<span class="flag"><span class="d"></span>${f}</span>`).join(' ')}</div><div class="cellsub" style="margin-top:4px">${this.whoCell(r.assigneeId)}</div></div></div></div>`).join('')}
       `).join(''):this.emptyBox('No red flags 🎉','Everything is on track — no overdue, stalled or heavily-rejected requests.','')}</div>
-      <div class="mfoot"><button class="btn primary" onclick="App.closeAll()">Close</button></div>`);
+      <div class="mfoot">${flagged.length?`<button class="btn danger" style="margin-right:auto" onclick="App.remindAllFlagged()">${svg(IC.bell,15)} Remind everyone responsible</button>`:''}<button class="btn primary" onclick="App.closeAll()">Close</button></div>`);
+  },
+  /* Everyone accountable for a request: its requester, the assigned discovery
+     person, the routing manager, and every active Discovery Manager. */
+  respPeople(r){
+    const ids=new Set();
+    [r.requesterId,r.assigneeId,r.assignedToId,r.routedToManagerId].forEach(x=>{if(x)ids.add(x);});
+    this.db.users.filter(u=>u.status==='active'&&roleKey(u)==='discovery_manager').forEach(u=>ids.add(u.id));
+    return [...ids].filter(id=>id&&id!==this.me.id);
+  },
+  async remindResponsible(id,quiet){
+    const r=this.req(id);if(!r)return 0;
+    const f=this.flags(r);
+    if(!f.length){if(!quiet)this.toast('No red flags on this request','ok');return 0;}
+    const people=this.respPeople(r);
+    if(!people.length){if(!quiet)this.toast('No one else to remind','err');return 0;}
+    const campNm=this.campName(r.campaignId)||r.campaignName||'—';
+    for(const pid of people){
+      await this.notify(pid,`Reminder: ${r.id} needs attention`,`${r.brandName} · ${campNm} — ${f.join(', ')}. Deadline ${r.deadline?fmtDT(r.deadline):'TBD'}.`,'reject',{pref:'assigned',subject:`[DiscoverDesk] Reminder: ${r.id} flagged`,body:`${r.id} (${r.brandName} · ${campNm}) is flagged: ${f.join(', ')}.\nDeadline: ${r.deadline?fmtDT(r.deadline):'TBD'}.\nRaised by ${this.user(r.requesterId)?.name||'—'} · assigned to ${r.assigneeId?this.user(r.assigneeId).name:'nobody yet'}.\n\nPlease action this request.\n— ${this.me.name}`});
+    }
+    this.pushEvent(r,`Reminder sent to ${people.length} responsible ${people.length===1?'person':'people'} — ${f.join(', ')}`,'reject');
+    if(!quiet){await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast(`Reminder sent to ${people.length} ${people.length===1?'person':'people'}`,'ok');this.renderNav();if(this._openReqId===id)this.openReq(id);}
+    return people.length;
+  },
+  async remindAllFlagged(){
+    const flagged=this.flaggedReqs();
+    if(!flagged.length)return this.toast('No red flags 🎉','ok');
+    let tot=0;for(const r of flagged)tot+=await this.remindResponsible(r.id,true);
+    await this.save('reqs');this.syncActsLocal();await this.save('acts');this.renderNav();
+    this.closeAll();this.toast(`Reminders sent for ${flagged.length} flagged request${flagged.length!==1?'s':''}`,'ok');
   },
   async addComment(id){
     const inp=document.getElementById('cmt_'+id);const tx=inp.value.trim();if(!tx)return;
@@ -2214,7 +2267,7 @@ const App={
         </div>
         <div class="field"><label>Priority</label><div class="role-pick three"><div class="r" data-pri="low" onclick="App.pickPri('low')">Low</div><div class="r on" data-pri="med" onclick="App.pickPri('med')">Medium</div><div class="r" data-pri="high" onclick="App.pickPri('high')">High</div></div></div>
         <div class="frow"><div class="field"><label>Brand budget (₹)</label><input class="inp" id="nq_budget" type="number" placeholder="what the client pays"></div>${this.can('bridge')?`<div class="field"><label>Internal cost est. (₹)</label><input class="inp" id="nq_icost" type="number" placeholder="your cost"></div>`:''}</div>
-        <div class="frow"><div class="field"><label>Deadline <span class="cellsub">(date & time — same-day is allowed)</span></label><input class="inp" id="nq_deadline" type="datetime-local"></div>
+        <div class="frow"><div class="field"><label>Deadline <span style="color:var(--danger)">*</span> <span class="cellsub">(date & time — same-day is allowed)</span></label><input class="inp" id="nq_deadline" type="datetime-local"></div>
           <div class="field"><label>${this.can('assign')?'Assign to Discovery':'Assign to Discovery Manager <span style="color:var(--danger)">*</span>'}</label><select class="inp" id="nq_assignee">${this.can('assign')?`<option value="">Unassigned</option>`+this.db.users.filter(u=>u.role==='discovery'&&u.status==='active').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join(''):`<option value="">— select a Discovery Manager —</option>`+this.db.users.filter(u=>roleKey(u)==='discovery_manager'&&u.status==='active').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></div></div>
       </div>
       <div class="mfoot"><button class="btn ghost" onclick="App.submitReq(true)">Save draft</button><button class="btn primary" onclick="App.submitReq(false)">Raise request</button></div>`);
@@ -2257,7 +2310,7 @@ const App={
     const canDiscover=this.can('discover')&&(r.assigneeId===this.me.id||this.can('admin'))&&['assigned','in_progress','rejected'].includes(r.status);
     const canReview=this.can('review')&&(r.requesterId===this.me.id||this.can('admin'))&&r.status==='under_review';
     this.fsReq(`<div class="dt-top"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div class="dt-meta"><span class="mono cellsub">${r.id}</span>${r.client==='new'?'<span class="badge b-new">New client</span>':'<span class="badge b-exec">Execution</span>'}${statusBadge(r.status)}${this.priBadge(r.priority)}${this.flagBadge(r)}</div><button class="xbtn" onclick="App.closeFs()">${svg(IC.x,16)}</button></div><div class="dt-title">${esc(r.brandName)}</div><div class="dt-sub">${esc(r.niche)} · ${r.reqType==='sample'?'Sample profiles':'Campaign · Round '+r.round}${camp?' · '+esc(camp.name):''}</div>
-      ${this.flags(r).length?`<div class="notice" style="margin-top:10px;background:var(--danger-soft);border-color:#f5cccc;color:#b3282d">${svg(IC.bolt,15)}<div><b>Red flags:</b> ${this.flags(r).join(' · ')}</div></div>`:''}
+      ${this.flags(r).length?`<div class="notice" style="margin-top:10px;background:var(--danger-soft);border-color:#f5cccc;color:#b3282d"><span class="alertdot" style="width:9px;height:9px;border-radius:50%;flex:none;margin-top:4px"></span><div style="flex:1"><b>Red flags:</b> ${this.flags(r).join(' · ')}</div>${this.respPeople(r).length?`<button class="btn danger xs" onclick="App.remindResponsible('${r.id}')">${svg(IC.bell,13)} Remind responsible</button>`:''}</div>`:''}
       <div class="actbar" style="margin-top:10px">${['low','med','high'].map(p=>`<button class="btn ${r.priority===p||(!r.priority&&p==='med')?'primary':'ghost'} xs" onclick="App.setPriority('${r.id}','${p}')">${p[0].toUpperCase()+p.slice(1)}</button>`).join('')}<span class="cellsub" style="align-self:center;margin-left:4px">priority</span></div></div>
       <div class="mbody">${pipe}
         <div class="specgrid">${spec('Requested by',this.user(r.requesterId)?.name||'—')}${spec('Assigned to',r.assigneeId?this.user(r.assigneeId).name:'<span class="unassigned">Unassigned</span>')}${spec('Followers',nfmt(r.fMin)+' – '+nfmt(r.fMax))}${spec('Creator type',esc(r.pType||'—'))}${spec('Platform',esc(r.platform||'—'))}${spec('Profiles needed',r.qty||'—')}${spec('Deadline',this.deadlineCell(r)+' '+this.slaChip(r))}${spec('Time in stage',this.agoStr(this.stageSince(r)))}${spec('Turnaround',tat!=null?fmtDur(tat):'in progress')}${r.brandBudget?spec('Brand budget',`₹${nfmt(r.brandBudget)}`):''}${(this.can('bridge')&&r.internalCost)?spec('Internal cost',`₹${nfmt(r.internalCost)}`):''}${(this.can('bridge')&&r.brandBudget&&r.internalCost)?spec('Est. margin',`<span style="color:${r.brandBudget-r.internalCost>=0?'var(--success)':'var(--danger)'}">₹${nfmt(r.brandBudget-r.internalCost)} (${Math.round((r.brandBudget-r.internalCost)/r.brandBudget*100)}%)</span>`):''}${r.sample?spec('Sample ref',linkify(r.sample)):''}</div>
@@ -4999,7 +5052,7 @@ Object.assign(App,{
   discBadge(r){
     if(!r||r.status==='draft')return '';
     if(r.discoveryEndedAt)return '<span class="badge b-approved" style="font-size:9px"><span class="d"></span>Discovery ended</span>';
-    if(this.discRunning(r))return '<span class="badge b-progress" style="font-size:9px"><span class="d"></span>Discovery live</span>';
+    if(this.discRunning(r))return '<span class="badge b-progress disc-live" style="font-size:9px"><span class="d"></span>Discovery live</span>';
     return '<span class="badge b-draft" style="font-size:9px"><span class="d"></span>Not started</span>';
   },
   // Clickable brand website (mandatory on every request). `stop` guards clicks inside clickable cards.
@@ -5326,7 +5379,7 @@ Object.assign(App,{
         </div>
         <div class="field"><label>Priority</label><div class="role-pick three"><div class="r" data-pri="low" onclick="App.pickPri('low')">Low</div><div class="r on" data-pri="med" onclick="App.pickPri('med')">Medium</div><div class="r" data-pri="high" onclick="App.pickPri('high')">High</div></div></div>
         <div class="frow"><div class="field"><label>Brand budget (₹)</label><input class="inp" id="nq_budget" type="number" placeholder="what the client pays"></div>${this.can('bridge')?`<div class="field"><label>Internal cost est. (₹)</label><input class="inp" id="nq_icost" type="number" placeholder="your cost"></div>`:''}</div>
-        <div class="frow"><div class="field"><label>Deadline <span class="cellsub">(date & time — same-day is allowed)</span></label><input class="inp" id="nq_deadline" type="datetime-local"></div>
+        <div class="frow"><div class="field"><label>Deadline <span style="color:var(--danger)">*</span> <span class="cellsub">(date & time — same-day is allowed)</span></label><input class="inp" id="nq_deadline" type="datetime-local"></div>
           <div class="field"><label>${this.can('assign')?'Assign to Discovery':'Assign to Discovery Manager <span style="color:var(--danger)">*</span>'}</label><select class="inp" id="nq_assignee">${this.can('assign')?`<option value="">Unassigned</option>`+this.db.users.filter(u=>u.role==='discovery'&&u.status==='active').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join(''):`<option value="">— select a Discovery Manager —</option>`+this.db.users.filter(u=>roleKey(u)==='discovery_manager'&&u.status==='active').map(u=>`<option value="${u.id}">${esc(u.name)}</option>`).join('')}</select></div></div>
       </div>
       <div class="mfoot"><button class="btn ghost" onclick="App.submitReq(true)">Save draft</button><button class="btn primary" onclick="App.submitReq(false)">Raise request</button></div>`);
@@ -5386,6 +5439,7 @@ Object.assign(App,{
       campId=nc.id;campName=cn;
     } else campName=this.campName(campId);
     const type=document.getElementById('nq_type').value,assignee=document.getElementById('nq_assignee').value||null,dlv=document.getElementById('nq_deadline').value;
+    if(!draft&&!dlv)return this.toast('Deadline is required — pick a date & time','err');
     // Sales/KAM (no 'assign' perm) MUST route to a Discovery Manager (hop 1); managers/admin assign a Discovery Employee directly.
     const isRaiser=!this.can('assign');
     if(isRaiser&&!draft&&!assignee)return this.toast('Assign a Discovery Manager to raise this request','err');
@@ -5473,7 +5527,7 @@ Object.assign(App,{
     this.fsReq(`<div class="dt-top"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div class="dt-meta"><span class="mono cellsub">${r.id}</span>${r.client==='new'?'<span class="badge b-new">New client</span>':'<span class="badge b-exec">Execution</span>'}${statusBadge(r.status)}${this.priBadge(r.priority)}${this.flagBadge(r)}</div><button class="xbtn" onclick="App.closeFs()">${svg(IC.x,16)}</button></div>
       <div class="dt-title">${esc(r.brandName)} <span class="campchip big">${esc(campNm||'no campaign')}</span></div>
       <div class="dt-sub">${esc(r.niche)} · ${r.reqType==='sample'?'Sample round '+(r.sampleRound||r.round||1):'Campaign · sample round '+(r.sampleRound||r.round||1)}${r.brandType?' · '+esc(r.brandType):''}${(r.creatorsPerVideo>1)?' · '+r.creatorsPerVideo+' creators/video':''}</div>
-      ${this.flags(r).length?`<div class="notice" style="margin-top:10px;background:var(--danger-soft);border-color:#f5cccc;color:#b3282d">${svg(IC.bolt,15)}<div><b>Red flags:</b> ${this.flags(r).join(' · ')}</div></div>`:''}
+      ${this.flags(r).length?`<div class="notice" style="margin-top:10px;background:var(--danger-soft);border-color:#f5cccc;color:#b3282d"><span class="alertdot" style="width:9px;height:9px;border-radius:50%;flex:none;margin-top:4px"></span><div style="flex:1"><b>Red flags:</b> ${this.flags(r).join(' · ')}</div>${this.respPeople(r).length?`<button class="btn danger xs" onclick="App.remindResponsible('${r.id}')">${svg(IC.bell,13)} Remind responsible</button>`:''}</div>`:''}
       <div class="actbar" style="margin-top:10px">${['low','med','high'].map(p=>`<button class="btn ${r.priority===p||(!r.priority&&p==='med')?'primary':'ghost'} xs" onclick="App.setPriority('${r.id}','${p}')">${p[0].toUpperCase()+p.slice(1)}</button>`).join('')}<span class="cellsub" style="align-self:center;margin-left:4px">priority</span><span style="flex:1"></span><button class="btn ghost xs" title="Copy this request's summary to the clipboard" onclick="App.copyReqSummary('${r.id}')">${svg(IC.copy||IC.report,14)} Copy summary</button></div></div>
       <div class="mbody">${pipe}
         ${ctrl}
