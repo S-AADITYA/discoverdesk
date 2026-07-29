@@ -1186,9 +1186,22 @@ const App={
       for(const r of this.db.reqs){
         const sig=JSON.stringify(this.stripMeta(r));
         if(this._reqSnap[r.id]===sig)continue;              // unchanged → skip
-        const {error}=await SB.from('requests').upsert(toRow(r));
+        // EXISTING rows go through UPDATE (which the assigned discovery person is
+        // allowed to do) — never upsert, because upsert also checks the INSERT
+        // policy (can_raise_request), which discovery users fail, silently losing
+        // their uploaded round. New rows insert; fall back to update on conflict.
+        const known=(this._reqIds&&this._reqIds.has(r.id))||Object.prototype.hasOwnProperty.call(this._reqSnap,r.id);
+        let error;
+        if(known){
+          ({error}=await SB.from('requests').update(toRow(r)).eq('id',r.id));
+        }else{
+          ({error}=await SB.from('requests').insert(toRow(r)));
+          if(error&&(error.code==='23505'||/duplicate|already exists|conflict/i.test(error.message||''))){
+            ({error}=await SB.from('requests').update(toRow(r)).eq('id',r.id));
+          }
+        }
         if(error){console.error('saveReqsCloud',r.id,error);failed.push(error);}
-        else this._reqSnap[r.id]=sig;
+        else {this._reqSnap[r.id]=sig;if(this._reqIds)this._reqIds.add(r.id);}
       }
       if(failed.length){const e=failed[0];this.toast('Request not saved to server: '+(e.message||e),'err');}
       if(removed.length){
@@ -2350,7 +2363,7 @@ const App={
     this._client=pre.client==='new'?'new':'existing';this._enqId=pre.enqId||null;this._pri='med';
     if(pre.brandName){document.getElementById('nq_brand').value='__new';}
     this.onTypeChange();
-    {const _dl=D(now()+3*864e5);_dl.setHours(19,0,0,0);document.getElementById('nq_deadline').value=localDTInput(_dl.getTime());}
+    {const _dd=document.getElementById('nq_deadline');const _t0=D(now());_t0.setHours(0,0,0,0);const _dl=D(now()+3*864e5);_dl.setHours(19,0,0,0);if(_dd){_dd.min=localDTInput(_t0.getTime());_dd.value=localDTInput(_dl.getTime());}}
   },
   pickClient(c){this._client=c;document.querySelectorAll('[data-c]').forEach(e=>e.classList.toggle('on',e.dataset.c===c));},
   pickPri(p){this._pri=p;document.querySelectorAll('[data-pri]').forEach(e=>e.classList.toggle('on',e.dataset.pri===p));},
@@ -4642,11 +4655,12 @@ const App={
 
   /* ================= INBOX ================= */
   vInbox(){
-    const mine=this.db.notif.filter(n=>n.to===this.me.id);
+    const all=this.can('admin')&&this._inboxAll;
+    const list=(all?this.db.notif.slice():this.db.notif.filter(n=>n.to===this.me.id)).sort((a,b)=>b.createdAt-a.createdAt);
     const ni=k=>({assign:['#5847eb',IC.disc],submit:['#6b3fd4',IC.review],approve:['#0ea472',IC.check],reject:['#e5484d',IC.x]}[k]||['#7a7a8c',IC.bell]);
-    this.set(`<div class="pagehead"><div class="lead"><h2>Inbox</h2><p>Notifications and one-click email drafts</p></div><div class="acts"><button class="btn ghost" onclick="App.markAllRead()">Mark all read</button><button class="btn ghost" onclick="App.emailSettings()">${svg(IC.gear,15)} Email settings</button></div></div>
-      <div class="notice" style="margin-bottom:16px">${svg(IC.mail,16)}<div>Events create in-app alerts here. Click <b>Email</b> on any alert to open a pre-filled draft in your mail app. Automatic server-side sending needs the hosted backend (see the note in People & Access).</div></div>
-      <div class="card pad">${mine.length?mine.map(n=>{const[col,ic]=ni(n.kind);return `<div class="notif ${n.read?'':'unread'}" onclick="App.readNotif('${n.id}')"><div class="ni" style="background:${col}20;color:${col}">${svg(ic,17)}</div><div style="flex:1"><div class="nt">${esc(n.title)}</div><div class="nb">${esc(n.body)}</div><div class="nm">${fmtDT(n.createdAt)}${n.email&&n.email.queued?' · email queued':''}</div></div>${n.email?`<button class="btn ghost xs" style="align-self:center" onclick="event.stopPropagation();App.sendNotifEmail('${n.id}')">${svg(IC.mail,13)} Email</button>`:''}</div>`;}).join(''):this.emptyBox('Inbox zero','Assignments, submissions and decisions will notify you here.','')}</div>`);
+    this.set(`<div class="pagehead"><div class="lead"><h2>Inbox</h2><p>${all?'Every notification across the workspace (admin view)':'Notifications and one-click email drafts'}</p></div><div class="acts">${this.can('admin')?`<button class="btn ${this._inboxAll?'primary':'ghost'}" onclick="App._inboxAll=!App._inboxAll;App.vInbox()">${svg(IC.people,15)} ${this._inboxAll?'Showing everyone':'Show everyone'}</button>`:''}<button class="btn ghost" onclick="App.markAllRead()">Mark all read</button><button class="btn ghost" onclick="App.emailSettings()">${svg(IC.gear,15)} Email settings</button></div></div>
+      <div class="notice" style="margin-bottom:16px">${svg(IC.mail,16)}<div>${all?'You are viewing <b>everyone\'s</b> notifications. Toggle off to see only your own.':'Events create in-app alerts here. Click <b>Email</b> on any alert to open a pre-filled draft in your mail app.'}</div></div>
+      <div class="card pad">${list.length?list.map(n=>{const[col,ic]=ni(n.kind);const who=all?this.user(n.to):null;return `<div class="notif ${n.read?'':'unread'}" onclick="App.readNotif('${n.id}')"><div class="ni" style="background:${col}20;color:${col}">${svg(ic,17)}</div><div style="flex:1"><div class="nt">${esc(n.title)}${who?` <span class="cellsub">→ ${esc(who.name)}</span>`:''}</div><div class="nb">${esc(n.body)}</div><div class="nm">${fmtDT(n.createdAt)}${n.email&&n.email.queued?' · email queued':''}</div></div>${n.email?`<button class="btn ghost xs" style="align-self:center" onclick="event.stopPropagation();App.sendNotifEmail('${n.id}')">${svg(IC.mail,13)} Email</button>`:''}</div>`;}).join(''):this.emptyBox('Inbox zero','Assignments, submissions and decisions will notify you here.','')}</div>`);
   },
   async readNotif(id){const n=this.db.notif.find(x=>x.id===id);if(n&&!n.read){n.read=true;await this.save('notif');this.refreshBell();this.vInbox();}},
   async markAllRead(){this.db.notif.forEach(n=>{if(n.to===this.me.id)n.read=true;});await this.save('notif');this.refreshBell();this.renderNav();this.vInbox();},
@@ -5271,6 +5285,9 @@ Object.assign(App,{
     if(!this.discRunning(r))return this.toast('Start discovery first.','err');
     if(this.submittedRound(r))return this.toast('A round is waiting on your selection — decide on it first.','err');
     if(this.openRound(r))return this.toast('A round is already open.','err');
+    const dl=await this.promptNewDeadline(`Deadline for round ${(r.rounds||[]).length+1}`);
+    if(dl==null)return;                       // cancelled
+    r.deadline=dl;r.flagNotifiedSig=null;     // fresh deadline → re-arm flag alerts
     const nrd=this.newRound(r,`Round ${(r.rounds||[]).length} requested by ${this.me.name}`);
     r.status='in_progress';r.submittedAt=null;
     this.pushEvent(r,`Round ${nrd.round} opened by ${this.me.name}`,'info');
@@ -5281,23 +5298,28 @@ Object.assign(App,{
   },
 
   _pad2(n){return String(n).padStart(2,'0');},
-  // count-UP: working hours elapsed since discovery started
+  // count-UP: working hours elapsed for the CURRENT round. Freezes the moment
+  // Discovery submits (until the requester opens the next round with a new deadline).
   discTimerHTML(r){
     if(!r.discoveryStartedAt)return '<span class="cellsub">not started</span>';
-    const end=r.discoveryEndedAt||now();
-    const ms=workMsBetween(r.discoveryStartedAt,end);   // count only working hours (10:00–19:00) — freezes off-hours
+    const sub=this.submittedRound(r);
+    const end=r.discoveryEndedAt||(sub&&sub.submittedAt)||now();
+    const ms=workMsBetween(r.discoveryStartedAt,end);   // working hours only (10:00–19:00)
     const h=Math.floor(ms/36e5),m=Math.floor(ms%36e5/6e4),s=Math.floor(ms%6e4/1000);
     const pad=this._pad2;
-    const paused=!r.discoveryEndedAt&&!inWorkHours(now());
-    const cls=r.discoveryEndedAt?'done':paused?'paused':'live';
+    const offHrs=!r.discoveryEndedAt&&!sub&&!inWorkHours(now());
+    const cls=r.discoveryEndedAt?'done':(sub||offHrs)?'paused':'live';
     const clock=`<span class="disc-timer ${cls}">${pad(h)}:${pad(m)}:${pad(s)}</span>`;
-    if(paused)return clock+` <span class="cellsub" title="Working hours are 10:00–19:00 — the clock is paused">⏸ off-hours · resumes ${fmtDT(nextWorkStart(now()))}</span>`;
+    if(sub&&!r.discoveryEndedAt)return clock+` <span class="cellsub">⏸ round ${sub.round} submitted — timer paused until the next round</span>`;
+    if(offHrs)return clock+` <span class="cellsub" title="Working hours are 10:00–19:00 — the clock is paused">⏸ off-hours · resumes ${fmtDT(nextWorkStart(now()))}</span>`;
     return clock;
   },
-  // count-DOWN (reverse): working hours remaining until the deadline
+  // count-DOWN (reverse): working hours remaining until this round's deadline
   discCountdownHTML(r){
-    if(!r.deadline)return '<span class="cellsub">no deadline set</span>';
     if(r.discoveryEndedAt)return '<span class="badge b-approved">Delivered</span>';
+    const sub=this.submittedRound(r);
+    if(sub)return `<span class="disc-timer done">✓ met</span> <span class="cellsub">round ${sub.round} submitted — the requester sets a new deadline for the next round</span>`;
+    if(!r.deadline)return '<span class="cellsub">no deadline set</span>';
     const pad=this._pad2;
     if(now()>=r.deadline){
       const late=workMsBetween(r.deadline,now());const h=Math.floor(late/36e5),m=Math.floor(late%36e5/6e4);
@@ -5310,6 +5332,24 @@ Object.assign(App,{
     const clock=`<span class="disc-timer ${cls}">${pad(h)}:${pad(m)}:${pad(s)}</span>`;
     if(paused)return clock+` <span class="cellsub" title="Working hours 10:00–19:00 — paused">⏸ off-hours · resumes ${fmtDT(nextWorkStart(now()))}</span>`;
     return clock+' <span class="cellsub">left to deadline</span>';
+  },
+  // modal to pick a new deadline (today or later) when opening the next round
+  promptNewDeadline(title){
+    return new Promise(resolve=>{
+      const t0=D(now());t0.setHours(0,0,0,0);
+      const def=D(now()+2*864e5);def.setHours(19,0,0,0);
+      this._resolveDL=(v)=>{this._resolveDL=null;resolve(v);};
+      this.modal(`<div class="mhx"><h3>${esc(title||'Set the deadline for the next round')}</h3><button class="xbtn" onclick="App._pickDL(null)">${svg(IC.x,16)}</button></div>
+        <div class="mbody">
+          <div class="cellsub" style="margin-bottom:8px">Discovery submitted the round, so the clock stopped. Pick a <b>new deadline & time</b> — the timer starts again for the next round.</div>
+          <div class="field"><label>New deadline <span style="color:var(--danger)">*</span></label><input class="inp" id="rnd_dl" type="datetime-local" min="${localDTInput(t0.getTime())}" value="${localDTInput(def.getTime())}"></div>
+        </div>
+        <div class="mfoot"><button class="btn ghost" onclick="App._pickDL(null)">Cancel</button><button class="btn primary" onclick="App._pickDL(document.getElementById('rnd_dl').value)">Open round & start timer</button></div>`);
+    });
+  },
+  _pickDL(v){
+    if(v){const t0=D(now());t0.setHours(0,0,0,0);const ms=new Date(v).getTime();if(!v||isNaN(ms))return this.toast('Pick a valid date & time','err');if(ms<t0.getTime())return this.toast('Deadline must be today or later','err');this.closeAll();if(this._resolveDL)this._resolveDL(ms);}
+    else{this.closeAll();if(this._resolveDL)this._resolveDL(null);}
   },
   discClockHTML(r){return this._discReverse?this.discCountdownHTML(r):this.discTimerHTML(r);},
   startDiscTick(id){
@@ -5552,7 +5592,7 @@ Object.assign(App,{
     this.onBrandPick();
     if(pre.campaignName){document.getElementById('nq_camp').value='__new';this.onCampPick();document.getElementById('nq_newcampname').value=pre.campaignName;}
     this.onTypeChange();
-    {const _dl=D(now()+3*864e5);_dl.setHours(19,0,0,0);document.getElementById('nq_deadline').value=localDTInput(_dl.getTime());}
+    {const _dd=document.getElementById('nq_deadline');const _t0=D(now());_t0.setHours(0,0,0,0);const _dl=D(now()+3*864e5);_dl.setHours(19,0,0,0);if(_dd){_dd.min=localDTInput(_t0.getTime());_dd.value=localDTInput(_dl.getTime());}}
   },
   onBrandPick(){
     const v=document.getElementById('nq_brand').value;
@@ -5604,6 +5644,7 @@ Object.assign(App,{
     } else campName=this.campName(campId);
     const type=document.getElementById('nq_type').value,assignee=document.getElementById('nq_assignee').value||null,dlv=document.getElementById('nq_deadline').value;
     if(!draft&&!dlv)return this.toast('Deadline is required — pick a date & time','err');
+    if(dlv){const _t0=D(now());_t0.setHours(0,0,0,0);if(new Date(dlv).getTime()<_t0.getTime())return this.toast('Deadline must be today or a future date','err');}
     // Sales/KAM (no 'assign' perm) MUST route to a Discovery Manager (hop 1); managers/admin assign a Discovery Employee directly.
     const isRaiser=!this.can('assign');
     if(isRaiser&&!draft&&!assignee)return this.toast('Assign a Discovery Manager to raise this request','err');
@@ -5892,6 +5933,9 @@ Object.assign(App,{
     if(undecided.length)return this.toast(`${undecided.length} creator(s) still undecided — select or reject every row. First: ${undecided[0]}`,'err');
     if(noReason.length)return this.toast(`A written reason is required for every rejection — ${noReason.length} missing. First: ${noReason[0]}`,'err');
     const rej=[];rd.rows.forEach((row,ri)=>{if((dec[ri]||{}).status==='rejected')rej.push({row,fb:(dec[ri]||{}).fb||''});});
+    // Opening a next round requires a fresh deadline — ask before changing anything.
+    let _newDl=null;
+    if(mode==='nextround'){_newDl=await this.promptNewDeadline(`Deadline for round ${rd.round+1}`);if(_newDl==null)return;}
     rd.approvedCount=rd.total-rej.length;rd.rejectedCount=rej.length;rd.reviewedAt=now();rd.reviewedBy=this.me.id;rd.status='decided';
     const summ=rej.map(x=>`${this.rowLabel(x.row,rd.cols)} — ${x.fb}`).join('; ');
     const campNm=this.campName(r.campaignId);
@@ -5912,6 +5956,7 @@ Object.assign(App,{
       rd.decision=rej.length?'partial':'approved';if(rej.length)rd.reason='Dropped: '+summ;
       const flow=await this.pushApproved(r,rd,dec);
       const nrd=this.newRound(r,rej.length?`Round ${rd.round+1} requested — ${rej.length} to replace`:`Round ${rd.round+1} requested — more profiles needed`);
+      r.deadline=_newDl;r.flagNotifiedSig=null;         // new round → new deadline, timer restarts
       r.status='in_progress';r.submittedAt=null;
       this.pushEvent(r,`Round ${rd.round}: ${rd.approvedCount} selected${rej.length?', '+rej.length+' rejected':''} → ${flow.sheet} to ${r.brandName} sheet · round ${nrd.round} opened`,rej.length?'reject':'approve');
       this.audit('round.next','req:'+r.id,{name:r.brandName,campaign:campNm,field:'round '+rd.round+' → '+nrd.round});
