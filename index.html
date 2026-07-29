@@ -4852,7 +4852,7 @@ const App={
     const uq=(this._uq||'').toLowerCase();
     const flt=arr=>uq?arr.filter(u=>((u.name||'')+' '+(u.email||'')+' '+(ROLES[roleKey(u)]||'')).toLowerCase().includes(uq)):arr;
     const pending=flt(this.db.users.filter(u=>u.status==='pending')),active=flt(this.db.users.filter(u=>u.status==='active')),disabled=flt(this.db.users.filter(u=>u.status==='disabled'));
-    const row=u=>`<tr><td><div class="who"><span class="avatar av">${initials(u.name)}</span><div><div class="nm">${esc(u.name)} ${u.locked?'<span class="badge b-primary" style="background:var(--primary-soft);color:var(--primary-deep);font-size:10px">Permanent admin</span>':''}</div><div class="cellsub">${esc(u.email)}</div></div></div></td><td><span class="badge b-draft" style="text-transform:none">${ROLES[roleKey(u)]}</span></td><td>${u.status==='active'?'<span class="badge b-active"><span class="d"></span>Active</span>':u.status==='pending'?'<span class="badge b-pending"><span class="d"></span>Pending</span>':'<span class="badge b-rejected"><span class="d"></span>Disabled</span>'}</td><td class="cellsub">${fmtDate(u.createdAt)}</td><td><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;align-items:center">${u.status==='pending'?`<button class="btn success xs" onclick="App.setUser('${u.id}','active')">Approve</button> <button class="btn ghost xs" onclick="App.setUser('${u.id}','disabled')">Decline</button>`:''}${!CLOUD&&u.status==='active'?`<button class="btn ghost xs" onclick="App.showPin('${u.id}')">${svg(IC.gear,11)} PIN</button> `:''}${u.status==='active'&&u.id!==this.me.id&&!u.locked?`<button class="btn ghost xs" onclick="App.openPerms('${u.id}')">Permissions</button> <button class="btn ghost xs" onclick="App.moduleAccessModal('${u.id}')">Modules</button> <button class="btn ghost xs" onclick="App.setUser('${u.id}','disabled')">Disable</button>`:''}${u.id===this.me.id?`<button class="btn ghost xs" onclick="App.moduleAccessModal('${u.id}')">My modules</button> <span class="cellsub">You</span>`:''}${u.locked&&u.id!==this.me.id?'<span class="cellsub">Protected</span>':''}${u.status==='disabled'?`<button class="btn ghost xs" onclick="App.setUser('${u.id}','active')">Re-enable</button>`:''}</td></tr>`;
+    const row=u=>`<tr><td><div class="who"><span class="avatar av">${initials(u.name)}</span><div><div class="nm">${esc(u.name)} ${u.locked?'<span class="badge b-primary" style="background:var(--primary-soft);color:var(--primary-deep);font-size:10px">Permanent admin</span>':''}</div><div class="cellsub">${esc(u.email)}</div></div></div></td><td><span class="badge b-draft" style="text-transform:none">${ROLES[roleKey(u)]}</span></td><td>${u.status==='active'?'<span class="badge b-active"><span class="d"></span>Active</span>':u.status==='pending'?'<span class="badge b-pending"><span class="d"></span>Pending</span>':'<span class="badge b-rejected"><span class="d"></span>Disabled</span>'}</td><td class="cellsub">${fmtDate(u.createdAt)}</td><td><div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap;align-items:center">${u.status==='pending'?`<button class="btn success xs" onclick="App.setUser('${u.id}','active')">Approve</button> <button class="btn ghost xs" onclick="App.setUser('${u.id}','disabled')">Decline</button>`:''}${!CLOUD&&u.status==='active'?`<button class="btn ghost xs" onclick="App.showPin('${u.id}')">${svg(IC.gear,11)} PIN</button> `:''}${u.status==='active'&&u.id!==this.me.id&&!u.locked?`<button class="btn ghost xs" onclick="App.openPerms('${u.id}')">Permissions</button> <button class="btn ghost xs" onclick="App.moduleAccessModal('${u.id}')">Modules</button> <button class="btn ghost xs" onclick="App.setUser('${u.id}','disabled')">Disable</button> <button class="btn ghost xs" style="color:var(--danger)" onclick="App.deleteAccount('${u.id}')">${svg(IC.x,11)} Delete</button>`:''}${u.id===this.me.id?`<button class="btn ghost xs" onclick="App.moduleAccessModal('${u.id}')">My modules</button> <span class="cellsub">You</span>`:''}${u.locked&&u.id!==this.me.id?'<span class="cellsub">Protected</span>':''}${u.status==='disabled'?`<button class="btn ghost xs" onclick="App.setUser('${u.id}','active')">Re-enable</button>`:''}</td></tr>`;
     const plan=Object.entries(ROLES).map(([rk,rv])=>`<tr><td class="strong">${rv}</td>${ALL_PERMS.map(([pk])=>`<td style="text-align:center">${(ROLE_DEFAULTS[rk]||{})[pk]?'<span style="color:var(--success)">●</span>':'<span style="color:var(--line)">○</span>'}</td>`).join('')}</tr>`).join('');
     this.set(`
       ${pending.length?`<div class="notice" style="margin-bottom:16px">${svg(IC.people,16)}<div><b>${pending.length} account${pending.length>1?'s':''}</b> waiting for approval below.</div></div>`:''}
@@ -4981,11 +4981,23 @@ where email = '${esc(this.me.email||'you@yourcompany.com')}';</pre><p class="cel
     const openWork=this.db.reqs.filter(r=>r.assigneeId===id&&!['approved','draft'].includes(r.status)).length;
     const msg=openWork?`${u.name} has ${openWork} live request${openWork>1?'s':''} assigned. Deleting will leave ${openWork>1?'them':'it'} unassigned (and flagged). Continue?`:`Delete ${u.name}'s account? This can't be undone. Their history stays in the audit trail.`;
     this.confirm('Delete account',msg,async()=>{
-      this.db.reqs.forEach(r=>{if(r.assigneeId===id){r.assigneeId=null;if(!['approved','draft'].includes(r.status))r.status='submitted';}});
-      this.db.users=this.db.users.filter(x=>x.id!==id);
-      await this.save('users');await this.save('reqs');
+      if(CLOUD){
+        // Server-authoritative delete via a security-definer RPC. This removes
+        // the profile for good (and unassigns their work), so a background
+        // refresh can never resurrect the row.
+        try{const {error}=await SB.rpc('admin_delete_user',{p_id:id});if(error)throw error;}
+        catch(e){console.error('admin_delete_user',e);return this.toast('Delete failed: '+(e.message||e),'err');}
+        this.db.users=this.db.users.filter(x=>x.id!==id);
+        this._userIds&&this._userIds.delete(id);
+        if(this._userSnap)delete this._userSnap[id];
+        this.db.reqs.forEach(r=>{if(r.assigneeId===id||r.assignedToId===id){r.assigneeId=null;r.assignedToId=null;if(!['approved','draft'].includes(r.status))r.status='submitted';}});
+      }else{
+        this.db.reqs.forEach(r=>{if(r.assigneeId===id){r.assigneeId=null;if(!['approved','draft'].includes(r.status))r.status='submitted';}});
+        this.db.users=this.db.users.filter(x=>x.id!==id);
+        await this.save('users');await this.save('reqs');
+      }
       this.pushLog&&this.pushLog('Deleted account '+u.name);
-      this.toast('Account deleted','ok');this.closeAll();this.renderNav();this.vUsers&&this.vUsers();
+      this.toast('Account deleted ✓','ok');this.closeAll();this.renderNav();this.vUsers&&this.vUsers();
     });
   },
   confirm(title,body,onYes){
