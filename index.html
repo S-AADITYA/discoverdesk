@@ -935,14 +935,18 @@ const initials=n=>(n||'?').split(' ').map(s=>s[0]).slice(0,2).join('').toUpperCa
 const esc=s=>(s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const nfmt=n=>{n=+n||0;return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(0)+'K':n;};
 const parseFol=s=>{if(typeof s==='number')return s;s=String(s).trim().toUpperCase().replace(/,/g,'');if(s.endsWith('M'))return parseFloat(s)*1e6;if(s.endsWith('K'))return parseFloat(s)*1e3;return parseFloat(s)||0;};
-/* ---- Working hours: the discovery clock only runs 10:00–19:00 local, pauses off-hours, resumes next working day ---- */
-const WORK_START_H=10, WORK_END_H=19;
+/* ---- Working hours: the discovery clock only runs 10:30–19:30 local, pauses off-hours, resumes next working day ---- */
+const WORK_START_H=10.5, WORK_END_H=19.5;   // 10:30 AM – 7:30 PM working window
 const _dayStart=ms=>{const d=D(ms);d.setHours(0,0,0,0);return d.getTime();};
 const inWorkHours=ms=>{const d=D(ms);const h=d.getHours()+d.getMinutes()/60+d.getSeconds()/3600;return h>=WORK_START_H&&h<WORK_END_H;};
 // milliseconds that fall inside working hours between a and b
 const workMsBetween=(a,b)=>{if(!(b>a))return 0;let total=0;const dayMs=864e5;for(let day=_dayStart(a);day<=b;day+=dayMs){const ws=day+WORK_START_H*36e5,we=day+WORK_END_H*36e5;const s=Math.max(a,ws),e=Math.min(b,we);if(e>s)total+=e-s;}return total;};
 // the next instant the clock is "live" again (returns `from` if already within working hours)
 const nextWorkStart=from=>{const day=_dayStart(from),ws=day+WORK_START_H*36e5,we=day+WORK_END_H*36e5;if(from<ws)return ws;if(from>=we)return day+864e5+WORK_START_H*36e5;return from;};
+// The instant that is `addMs` of WORKING time after `from` (skips nights/off-hours).
+const addWorkMs=(from,addMs)=>{let t=inWorkHours(from)?from:nextWorkStart(from);let remain=addMs;for(let i=0;i<400&&remain>0;i++){const we=_dayStart(t)+WORK_END_H*36e5;const avail=we-t;if(remain<=avail)return t+remain;remain-=avail;t=nextWorkStart(we);}return t;};
+const MIN_DEADLINE_WORK_MS=4*36e5;                       // Sales/KAM must give discovery ≥4 working hours
+const minDeadline=()=>addWorkMs(now(),MIN_DEADLINE_WORK_MS);
 // turn any http(s) / www reference into a clickable link; escapes everything else
 const linkify=s=>{if(s==null)return '';s=String(s);const re=/((?:https?:\/\/|www\.)[^\s<>()]+)/gi;let out='',last=0,m;while((m=re.exec(s))){out+=esc(s.slice(last,m.index));let u=m[0].replace(/[.,;!?'")\]]+$/,'');const href=/^https?:/i.test(u)?u:'https://'+u;out+=`<a href="${esc(href)}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:600;text-decoration:none">${esc(u.replace(/^https?:\/\//,''))} ↗</a>`;last=m.index+u.length;}out+=esc(s.slice(last));return out;};
 const STAGES=[['assigned','Assigned'],['in_progress','In Discovery'],['submitted','Submitted'],['under_review','In Review'],['approved','Delivered']];
@@ -2392,7 +2396,7 @@ const App={
     this._client=pre.client==='new'?'new':'existing';this._enqId=pre.enqId||null;this._pri='med';
     if(pre.brandName){document.getElementById('nq_brand').value='__new';}
     this.onTypeChange();
-    {const _dd=document.getElementById('nq_deadline');const _t0=D(now());_t0.setHours(0,0,0,0);const _dl=D(now()+3*864e5);_dl.setHours(19,0,0,0);if(_dd){_dd.min=localDTInput(_t0.getTime());_dd.value=localDTInput(_dl.getTime());}}
+    {const _dd=document.getElementById('nq_deadline');const _min=minDeadline();const _def=D(now()+2*864e5);_def.setHours(19,30,0,0);const _defMs=Math.max(_def.getTime(),_min);if(_dd){_dd.min=localDTInput(_min);_dd.value=localDTInput(_defMs);}}
   },
   pickClient(c){this._client=c;document.querySelectorAll('[data-c]').forEach(e=>e.classList.toggle('on',e.dataset.c===c));},
   pickPri(p){this._pri=p;document.querySelectorAll('[data-pri]').forEach(e=>e.classList.toggle('on',e.dataset.pri===p));},
@@ -5377,7 +5381,7 @@ Object.assign(App,{
     if(r.discoveryEndedAt)return clock+` <span class="cellsub">total across ${r.rounds.length} round${r.rounds.length!==1?'s':''}</span>`;
     if(sub)return clock+` <span class="cellsub">⏸ round ${sub.round} delivered — timer paused until the next round</span>`;
     if(!this.clockRunning(r))return clock+` <span class="cellsub">⏸ paused</span>`;
-    if(offHrs)return clock+` <span class="cellsub" title="Working hours are 10:00–19:00 — paused">⏸ off-hours · resumes ${fmtDT(nextWorkStart(now()))}</span>`;
+    if(offHrs)return clock+` <span class="cellsub" title="Working hours are 10:30–19:30 — paused">⏸ off-hours · resumes ${fmtDT(nextWorkStart(now()))}</span>`;
     return clock;
   },
   // Per-round + total time report
@@ -5390,7 +5394,7 @@ Object.assign(App,{
       const state=st==='submitted'?'submitted':st==='open'?(this.clockRunning(r)?'in progress':'open'):(rd.decision==='rejected'?'more requested':'closed');
       return `<tr><td>Round ${rd.round}</td><td>${rd.deadlineAt?fmtDT(rd.deadlineAt):(r.deadline&&rd.round===rounds.length?fmtDT(r.deadline):'—')}</td><td class="mono">${spent!=null?this.fmtHMS(spent):'—'}</td><td>${rd.submittedAt?fmtDT(rd.submittedAt):'—'}</td><td class="cellsub">${state}</td></tr>`;
     }).join('');
-    return `<div class="sec-t">Time report <span class="cellsub" style="text-transform:none;letter-spacing:0">— working hours (10:00–19:00) per round</span></div>
+    return `<div class="sec-t">Time report <span class="cellsub" style="text-transform:none;letter-spacing:0">— working hours (10:30–19:30) per round</span></div>
       <div class="card" style="overflow-x:auto;margin-bottom:14px"><table class="tbl"><thead><tr><th>Round</th><th>Deadline</th><th>Working time</th><th>Submitted</th><th>State</th></tr></thead>
       <tbody>${rows}</tbody>
       <tfoot><tr style="font-weight:700;border-top:2px solid var(--line)"><td>Total</td><td></td><td class="mono">${this.fmtHMS(this.clockElapsedMs(r))}</td><td colspan="2" class="cellsub">${r.discoveryEndedAt?'delivered':this.clockRunning(r)?'running':'paused'}</td></tr></tfoot></table></div>`;
@@ -5411,25 +5415,25 @@ Object.assign(App,{
     const paused=!inWorkHours(now());
     const cls=paused?'paused':(ms<2*36e5?'over':'live');  // last 2 working hours flash red
     const clock=`<span class="disc-timer ${cls}">${pad(h)}:${pad(m)}:${pad(s)}</span>`;
-    if(paused)return clock+` <span class="cellsub" title="Working hours 10:00–19:00 — paused">⏸ off-hours · resumes ${fmtDT(nextWorkStart(now()))}</span>`;
+    if(paused)return clock+` <span class="cellsub" title="Working hours 10:30–19:30 — paused">⏸ off-hours · resumes ${fmtDT(nextWorkStart(now()))}</span>`;
     return clock+' <span class="cellsub">left to deadline</span>';
   },
-  // modal to pick a new deadline (today or later) when opening the next round
+  // modal to pick a new deadline (≥4 working hours away) when opening the next round
   promptNewDeadline(title){
     return new Promise(resolve=>{
-      const t0=D(now());t0.setHours(0,0,0,0);
-      const def=D(now()+2*864e5);def.setHours(19,0,0,0);
+      const min=minDeadline();
+      const def=(()=>{const d=D(now()+864e5);d.setHours(19,30,0,0);return Math.max(d.getTime(),min);})();
       this._resolveDL=(v)=>{this._resolveDL=null;resolve(v);};
       this.modal(`<div class="mhx"><h3>${esc(title||'Set the deadline for the next round')}</h3><button class="xbtn" onclick="App._pickDL(null)">${svg(IC.x,16)}</button></div>
         <div class="mbody">
-          <div class="cellsub" style="margin-bottom:8px">Discovery submitted the round, so the clock stopped. Pick a <b>new deadline & time</b> — the timer starts again for the next round.</div>
-          <div class="field"><label>New deadline <span style="color:var(--danger)">*</span></label><input class="inp" id="rnd_dl" type="datetime-local" min="${localDTInput(t0.getTime())}" value="${localDTInput(def.getTime())}"></div>
+          <div class="cellsub" style="margin-bottom:8px">Discovery submitted the round, so the clock stopped. Pick a <b>new deadline & time</b> — the timer resumes for the next round. Minimum is <b>4 working hours</b> (earliest ${fmtDT(min)}).</div>
+          <div class="field"><label>New deadline <span style="color:var(--danger)">*</span></label><input class="inp" id="rnd_dl" type="datetime-local" min="${localDTInput(min)}" value="${localDTInput(def)}"></div>
         </div>
         <div class="mfoot"><button class="btn ghost" onclick="App._pickDL(null)">Cancel</button><button class="btn primary" onclick="App._pickDL(document.getElementById('rnd_dl').value)">Open round & start timer</button></div>`);
     });
   },
   _pickDL(v){
-    if(v){const t0=D(now());t0.setHours(0,0,0,0);const ms=new Date(v).getTime();if(!v||isNaN(ms))return this.toast('Pick a valid date & time','err');if(ms<t0.getTime())return this.toast('Deadline must be today or later','err');this.closeAll();if(this._resolveDL)this._resolveDL(ms);}
+    if(v){const ms=new Date(v).getTime();if(!v||isNaN(ms))return this.toast('Pick a valid date & time','err');if(ms<minDeadline()-6e4)return this.toast(`Give discovery at least 4 working hours — earliest is ${fmtDT(minDeadline())}`,'err');this.closeAll();if(this._resolveDL)this._resolveDL(ms);}
     else{this.closeAll();if(this._resolveDL)this._resolveDL(null);}
   },
   discClockHTML(r){return this._discReverse?this.discCountdownHTML(r):this.discTimerHTML(r);},
@@ -5675,7 +5679,7 @@ Object.assign(App,{
     this.onBrandPick();
     if(pre.campaignName){document.getElementById('nq_camp').value='__new';this.onCampPick();document.getElementById('nq_newcampname').value=pre.campaignName;}
     this.onTypeChange();
-    {const _dd=document.getElementById('nq_deadline');const _t0=D(now());_t0.setHours(0,0,0,0);const _dl=D(now()+3*864e5);_dl.setHours(19,0,0,0);if(_dd){_dd.min=localDTInput(_t0.getTime());_dd.value=localDTInput(_dl.getTime());}}
+    {const _dd=document.getElementById('nq_deadline');const _min=minDeadline();const _def=D(now()+2*864e5);_def.setHours(19,30,0,0);const _defMs=Math.max(_def.getTime(),_min);if(_dd){_dd.min=localDTInput(_min);_dd.value=localDTInput(_defMs);}}
   },
   onBrandPick(){
     const v=document.getElementById('nq_brand').value;
@@ -5727,7 +5731,7 @@ Object.assign(App,{
     } else campName=this.campName(campId);
     const type=document.getElementById('nq_type').value,assignee=document.getElementById('nq_assignee').value||null,dlv=document.getElementById('nq_deadline').value;
     if(!draft&&!dlv)return this.toast('Deadline is required — pick a date & time','err');
-    if(dlv){const _t0=D(now());_t0.setHours(0,0,0,0);if(new Date(dlv).getTime()<_t0.getTime())return this.toast('Deadline must be today or a future date','err');}
+    if(dlv&&new Date(dlv).getTime()<minDeadline()-6e4)return this.toast(`Give discovery at least 4 working hours — earliest deadline is ${fmtDT(minDeadline())}`,'err');
     // Sales/KAM (no 'assign' perm) MUST route to a Discovery Manager (hop 1); managers/admin assign a Discovery Employee directly.
     const isRaiser=!this.can('assign');
     if(isRaiser&&!draft&&!assignee)return this.toast('Assign a Discovery Manager to raise this request','err');
