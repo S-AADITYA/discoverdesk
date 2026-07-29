@@ -5275,7 +5275,8 @@ Object.assign(App,{
     r.discoveryStartedAt=now();r.discoveryEndedAt=null;r.discoveryStartedBy=byId||r.requesterId;r.closed=false;
     if(r.status==='assigned'||r.status==='draft')r.status='in_progress';
     r.startedAt=r.startedAt||now();
-    if(!this.openRound(r)&&!this.submittedRound(r))this.newRound(r,'Discovery clock auto-started on assignment');
+    this.clockStart(r);
+    if(!this.openRound(r)&&!this.submittedRound(r)){const rd=this.newRound(r,'Discovery clock auto-started on assignment');rd.openedAtAccum=this.clockElapsedMs(r);rd.deadlineAt=r.deadline||null;}
     this.pushEvent(r,'Discovery clock auto-started on assignment to Discovery','info');
     return true;
   },
@@ -5288,8 +5289,9 @@ Object.assign(App,{
     if(!r.campaignId)return this.toast('This request has no campaign. Set the campaign first — every round belongs to a campaign.','err');
     r.discoveryStartedAt=now();r.discoveryEndedAt=null;r.discoveryStartedBy=this.me.id;r.closed=false;
     r.status='in_progress';r.startedAt=r.startedAt||now();
+    this.clockStart(r);
     const pending=this.submittedRound(r);
-    if(!this.openRound(r)&&!pending)this.newRound(r,'Discovery started');
+    if(!this.openRound(r)&&!pending){const rd=this.newRound(r,'Discovery started');rd.openedAtAccum=this.clockElapsedMs(r);rd.deadlineAt=r.deadline||null;}
     this.pushEvent(r,'Discovery started by '+this.me.name+' — round '+(this.openRound(r)||{round:1}).round+' open','info');
     this.audit('req.discovery.start','req:'+r.id,{name:r.brandName,campaign:this.campName(r.campaignId)});
     await this.save('reqs');this.syncActsLocal();await this.save('acts');
@@ -5307,7 +5309,7 @@ Object.assign(App,{
     const op=this.openRound(r);
     if(op&&(op.rows||[]).length&&!confirm(`Round ${op.round} is still open with ${op.rows.length} creator(s) not submitted. End discovery anyway?`))return;
     if(op){op.status='decided';op.decision=op.decision||'closed';op.reason=op.reason||'Closed by requester';}
-    r.discoveryEndedAt=now();r.closed=true;r.status='approved';
+    this.clockStop(r);r.discoveryEndedAt=now();r.closed=true;r.status='approved';
     const mins=Math.round((r.discoveryEndedAt-r.discoveryStartedAt)/60000);
     this.pushEvent(r,`Discovery ended by ${this.me.name} — ${fmtDur(mins/60)} total, ${r.rounds.length} round(s)`,'approve');
     this.audit('req.discovery.end','req:'+r.id,{name:r.brandName,campaign:this.campName(r.campaignId),field:mins+' min'});
@@ -5329,7 +5331,9 @@ Object.assign(App,{
     const dl=await this.promptNewDeadline(`Deadline for round ${(r.rounds||[]).length+1}`);
     if(dl==null)return;                       // cancelled
     r.deadline=dl;r.flagNotifiedSig=null;     // fresh deadline → re-arm flag alerts
+    this.clockStart(r);                        // resume the stopwatch from where it left off
     const nrd=this.newRound(r,`Round ${(r.rounds||[]).length} requested by ${this.me.name}`);
+    nrd.openedAtAccum=this.clockElapsedMs(r);nrd.deadlineAt=dl;
     r.status='in_progress';r.submittedAt=null;
     this.pushEvent(r,`Round ${nrd.round} opened by ${this.me.name}`,'info');
     this.audit('round.next','req:'+r.id,{name:r.brandName,campaign:this.campName(r.campaignId),field:'round '+nrd.round});
@@ -5339,21 +5343,57 @@ Object.assign(App,{
   },
 
   _pad2(n){return String(n).padStart(2,'0');},
-  // count-UP: working hours elapsed for the CURRENT round. Freezes the moment
-  // Discovery submits (until the requester opens the next round with a new deadline).
+  /* ---- accumulating working-hours stopwatch ----
+     clockAccumMs = time banked from finished active stretches;
+     clockRunSince = when the current stretch started (null while paused).
+     Total = banked + (running ? now-since : 0). Pauses on submit, resumes
+     from where it left off when the next round opens. */
+  clockElapsedMs(r){
+    if(!r)return 0;
+    // New model
+    if(r.clockAccumMs!=null||r.clockRunSince!=null){
+      let acc=r.clockAccumMs||0;
+      if(r.clockRunSince)acc+=workMsBetween(r.clockRunSince,now());
+      return acc;
+    }
+    // Legacy fallback for requests created before the accumulator existed.
+    if(r.discoveryStartedAt){const sub=this.submittedRound(r);const end=r.discoveryEndedAt||(sub&&sub.submittedAt)||now();return workMsBetween(r.discoveryStartedAt,end);}
+    return 0;
+  },
+  clockRunning(r){return !!(r&&r.clockRunSince);},
+  clockStart(r){if(!r)return;if(r.clockAccumMs==null)r.clockAccumMs=0;if(!r.clockRunSince)r.clockRunSince=now();},
+  clockStop(r){if(r&&r.clockRunSince){r.clockAccumMs=(r.clockAccumMs||0)+workMsBetween(r.clockRunSince,now());r.clockRunSince=null;}},
+  fmtHMS(ms){const pad=this._pad2;const h=Math.floor(ms/36e5),m=Math.floor(ms%36e5/6e4),s=Math.floor(ms%6e4/1000);return pad(h)+':'+pad(m)+':'+pad(s);},
+  // count-UP: total working hours banked so far. Freezes when Discovery submits,
+  // resumes (from the same total) when the requester opens the next round.
   discTimerHTML(r){
     if(!r.discoveryStartedAt)return '<span class="cellsub">not started</span>';
+    const ms=this.clockElapsedMs(r);
     const sub=this.submittedRound(r);
-    const end=r.discoveryEndedAt||(sub&&sub.submittedAt)||now();
-    const ms=workMsBetween(r.discoveryStartedAt,end);   // working hours only (10:00–19:00)
-    const h=Math.floor(ms/36e5),m=Math.floor(ms%36e5/6e4),s=Math.floor(ms%6e4/1000);
-    const pad=this._pad2;
-    const offHrs=!r.discoveryEndedAt&&!sub&&!inWorkHours(now());
-    const cls=r.discoveryEndedAt?'done':(sub||offHrs)?'paused':'live';
-    const clock=`<span class="disc-timer ${cls}">${pad(h)}:${pad(m)}:${pad(s)}</span>`;
-    if(sub&&!r.discoveryEndedAt)return clock+` <span class="cellsub">⏸ round ${sub.round} submitted — timer paused until the next round</span>`;
-    if(offHrs)return clock+` <span class="cellsub" title="Working hours are 10:00–19:00 — the clock is paused">⏸ off-hours · resumes ${fmtDT(nextWorkStart(now()))}</span>`;
+    const offHrs=this.clockRunning(r)&&!inWorkHours(now());
+    const running=this.clockRunning(r)&&!offHrs;
+    const cls=r.discoveryEndedAt?'done':running?'live':'paused';
+    const clock=`<span class="disc-timer ${cls}">${this.fmtHMS(ms)}</span>`;
+    if(r.discoveryEndedAt)return clock+` <span class="cellsub">total across ${r.rounds.length} round${r.rounds.length!==1?'s':''}</span>`;
+    if(sub)return clock+` <span class="cellsub">⏸ round ${sub.round} delivered — timer paused until the next round</span>`;
+    if(!this.clockRunning(r))return clock+` <span class="cellsub">⏸ paused</span>`;
+    if(offHrs)return clock+` <span class="cellsub" title="Working hours are 10:00–19:00 — paused">⏸ off-hours · resumes ${fmtDT(nextWorkStart(now()))}</span>`;
     return clock;
+  },
+  // Per-round + total time report
+  timeReportHTML(r){
+    const rounds=(r.rounds||[]);
+    if(!r.discoveryStartedAt&&!rounds.length)return '';
+    const rows=rounds.map(rd=>{
+      const spent=rd.spentMs!=null?rd.spentMs:(rd.openedAtAccum!=null?Math.max(0,this.clockElapsedMs(r)-rd.openedAtAccum):null);
+      const st=this.roundStatus(rd);
+      const state=st==='submitted'?'submitted':st==='open'?(this.clockRunning(r)?'in progress':'open'):(rd.decision==='rejected'?'more requested':'closed');
+      return `<tr><td>Round ${rd.round}</td><td>${rd.deadlineAt?fmtDT(rd.deadlineAt):(r.deadline&&rd.round===rounds.length?fmtDT(r.deadline):'—')}</td><td class="mono">${spent!=null?this.fmtHMS(spent):'—'}</td><td>${rd.submittedAt?fmtDT(rd.submittedAt):'—'}</td><td class="cellsub">${state}</td></tr>`;
+    }).join('');
+    return `<div class="sec-t">Time report <span class="cellsub" style="text-transform:none;letter-spacing:0">— working hours (10:00–19:00) per round</span></div>
+      <div class="card" style="overflow-x:auto;margin-bottom:14px"><table class="tbl"><thead><tr><th>Round</th><th>Deadline</th><th>Working time</th><th>Submitted</th><th>State</th></tr></thead>
+      <tbody>${rows}</tbody>
+      <tfoot><tr style="font-weight:700;border-top:2px solid var(--line)"><td>Total</td><td></td><td class="mono">${this.fmtHMS(this.clockElapsedMs(r))}</td><td colspan="2" class="cellsub">${r.discoveryEndedAt?'delivered':this.clockRunning(r)?'running':'paused'}</td></tr></tfoot></table></div>`;
   },
   // count-DOWN (reverse): working hours remaining until this round's deadline
   discCountdownHTML(r){
@@ -5449,9 +5489,11 @@ Object.assign(App,{
     if(!rd)return this.toast('No open round to submit','err');
     if(!(this.canRunDiscovery(r)||this.can('admin')))return this.toast('Only the assigned discovery person can submit this round.','err');
     if(!(rd.rows||[]).length)return this.toast('Round is empty — add creators before submitting.','err');
+    this.clockStop(r);                                            // timer stops on submit
+    rd.spentMs=Math.max(0,this.clockElapsedMs(r)-(rd.openedAtAccum||0));
     rd.status='submitted';rd.submittedAt=now();rd.submittedBy=this.me.id;rd.total=rd.rows.length;
     r.status='under_review';r.submittedAt=now();
-    this.pushEvent(r,`Round ${rd.round} submitted — ${rd.total} profiles`,'submit');
+    this.pushEvent(r,`Round ${rd.round} delivered — ${rd.total} profiles · ${this.fmtHMS(rd.spentMs)} working time`,'submit');
     this.audit('round.submit','req:'+r.id,{name:r.brandName,campaign:this.campName(r.campaignId),field:'round '+rd.round+' · '+rd.total+' profiles'});
     await this.notify(r.requesterId,'Round '+rd.round+' submitted for your selection',`${r.id} · ${r.brandName} — ${this.campName(r.campaignId)} · ${rd.total} profiles.`,'submit',{pref:'submitted',subject:`[DiscoverDesk] Ready to select: ${r.id} round ${rd.round}`,body:`${this.me.name} submitted round ${rd.round} of ${r.id} (${r.brandName} · ${this.campName(r.campaignId)}) with ${rd.total} profiles. Select or reject each creator — a reason is required on every row.`});
     await this.save('reqs');this.syncActsLocal();await this.save('acts');
@@ -5781,6 +5823,7 @@ Object.assign(App,{
         ${ctrl}
         <div class="specgrid">${spec('Campaign',esc(campNm||'—'))}${(r.brandWebsite||(this.brand(r.brandId)||{}).website)?spec('Website',(()=>{const w=r.brandWebsite||this.brand(r.brandId).website;return `<a href="${esc(w)}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:600;text-decoration:none">${esc(w.replace(/^https?:\/\//,''))} ↗</a>`;})()):''}${spec('Requested by',esc(this.reqOwnerName(r))+(r.requesterRole?` · <span class="cellsub">${esc(r.requesterRole)}</span>`:''))}${spec('Assigned to',r.assigneeId?esc(this.user(r.assigneeId)?.name||r.assigneeName||'—'):'<span class="unassigned">Unassigned</span>')}${spec('Selection rounds',r.rounds.length||0)}${spec('Followers',nfmt(r.fMin)+' – '+nfmt(r.fMax))}${spec('Creator type',esc(r.pType||'—'))}${spec('Platform',esc(r.platform||'—'))}${spec('Profiles needed',r.qty||'—')}${spec('Deadline',this.deadlineCell(r)+' '+this.slaChip(r))}${spec('Time in stage',this.agoStr(this.stageSince(r)))}${spec('Turnaround',tat!=null?fmtDur(tat):'in progress')}${r.brandBudget?spec('Brand budget',`₹${nfmt(r.brandBudget)}`):''}${(this.can('bridge')&&r.internalCost)?spec('Internal cost',`₹${nfmt(r.internalCost)}`):''}${(this.can('bridge')&&r.brandBudget&&r.internalCost)?spec('Est. margin',`<span style="color:${r.brandBudget-r.internalCost>=0?'var(--success)':'var(--danger)'}">₹${nfmt(r.brandBudget-r.internalCost)} (${Math.round((r.brandBudget-r.internalCost)/r.brandBudget*100)}%)</span>`):''}${r.sample?spec('Sample ref',linkify(r.sample)):''}</div>
         ${r.notes?`<div class="notice">${svg(IC.bolt,16)}<div>${linkify(r.notes)}</div></div>`:''}
+        ${(r.discoveryStartedAt||(r.rounds||[]).length)?this.timeReportHTML(r):''}
         ${this.reqDocsHTML(r)}
         ${(r.suggestedCreators&&r.suggestedCreators.length)?`<div class="sec-t">Client-requested creators <span class="cellsub">(${r.suggestedCreators.length})</span></div><div class="card pad" style="margin-bottom:14px;background:var(--surface-2)"><div class="cellsub" style="margin-bottom:8px">Pre-picked by ${esc(this.user(r.requesterId)?.name||'Sales/KAM')}.${openRd?' <b>Push them into the open round →</b>':''}</div>${r.suggestedCreators.map(sc=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line-2)"><div><b style="font-size:13px">${esc(sc.name||('@'+sc.handle))}</b> <span class="cellsub">${nfmt(sc.followers||0)} · ${esc(sc.cats||sc.category||'—')}</span></div><div style="display:flex;gap:6px;align-items:center"><span class="cellsub">${esc(sc.reason||'')} · ${esc(sc.addedByName||'—')}</span>${(openRd&&this.canFillRound(r))?`<button class="btn ghost xs" onclick="App.roundAdd('${r.id}','${esc(sc.handle)}','client-requested','Client requested').then(()=>App.openReq('${r.id}'))">→ Round ${openRd.round}</button>`:''}</div></div>`).join('')}</div>`:''}
         ${!r.assigneeId&&r.status!=='draft'&&(this.can('assign')||(r.requesterId===this.me.id&&!r.routedToManagerId))?(()=>{const tgt=this.assignTargets();return tgt.length?`<div class="sec-t">Assign discovery</div><div class="cellsub" style="margin:-4px 0 8px">${this.assignHint()}</div><div style="display:flex;gap:8px"><select class="mini-select" id="assignSel" style="flex:1">${tgt.map(u=>`<option value="${u.id}">${esc(u.name)}${u.id===this.me.id?' (you)':''} · ${ROLES[roleKey(u)]}</option>`).join('')}</select><button class="btn primary sm" onclick="App.assignReq('${r.id}')">Assign</button></div>`:`<div class="sec-t">Assign discovery</div><div class="notice" style="font-size:12px">${svg(IC.bolt,13)}<div>No eligible people to assign to yet.</div></div>`;})():''}
@@ -5996,8 +6039,10 @@ Object.assign(App,{
       // creators are pushed to the sheet first, then a fresh round opens for more profiles.
       rd.decision=rej.length?'partial':'approved';if(rej.length)rd.reason='Dropped: '+summ;
       const flow=await this.pushApproved(r,rd,dec);
+      r.deadline=_newDl;r.flagNotifiedSig=null;         // new round → new deadline
+      this.clockStart(r);                                // resume the stopwatch from where it left off
       const nrd=this.newRound(r,rej.length?`Round ${rd.round+1} requested — ${rej.length} to replace`:`Round ${rd.round+1} requested — more profiles needed`);
-      r.deadline=_newDl;r.flagNotifiedSig=null;         // new round → new deadline, timer restarts
+      nrd.openedAtAccum=this.clockElapsedMs(r);nrd.deadlineAt=_newDl;
       r.status='in_progress';r.submittedAt=null;
       this.pushEvent(r,`Round ${rd.round}: ${rd.approvedCount} selected${rej.length?', '+rej.length+' rejected':''} → ${flow.sheet} to ${r.brandName} sheet · round ${nrd.round} opened`,rej.length?'reject':'approve');
       this.audit('round.next','req:'+r.id,{name:r.brandName,campaign:campNm,field:'round '+rd.round+' → '+nrd.round});
