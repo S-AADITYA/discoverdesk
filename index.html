@@ -2497,13 +2497,19 @@ const App={
     const handle=this.cnorm(this.cget(row,['handle','username','instagram','profile url','profile link'])||this.cget(row,['name'])||'');
     const nm=this.cgetTxt(row,['name','full name','creator'],60)||('@'+handle);
     const fol=this.cgetNum(row,['followers','follower','follow','audience size','subs']);
-    const eng=this.cgetPct(row,['engagement rate','engagement','eng rate','er']);
-    const extra=cols.filter(c=>!/^(name|handle|username|followers?|engagement)$/i.test(c)).slice(0,6);
+    let eng=this.cgetPct(row,['engagement rate','engagement','eng rate','er']);
+    const known=this.resolveCreator(handle);
+    if(!eng&&known&&known.eng)eng=this.cgetPct({e:known.eng},['e'])||(''+known.eng);
+    const cats=known?this.catsHTML(known,4):esc(this.cgetTxt(row,['categories','category','niche','genre','vertical'],80)||'—');
+    // MUST mirror the header's column set exactly (header adds a dedicated "Top
+    // categories" column and drops category/categories from the extras).
+    const extra=cols.filter(c=>!/^_/.test(c)&&!/^(name|handle|username|followers?|engagement|categories|category|email|platform)$/i.test(c)).slice(0,4);
     return `<tr class="revrow ${st}" id="rr_${i}_${ri}">
       <td style="white-space:nowrap"><button class="pickb ok ${st==='approved'?'on':''}" title="Shortlist" onclick="App.markRow2('${id}',${i},${ri},'approved')">${svg(IC.check,13)}</button><button class="pickb no ${st==='rejected'?'on':''}" title="Reject" onclick="App.markRow2('${id}',${i},${ri},'rejected')">${svg(IC.x,13)}</button></td>
       <td><div class="strong">${esc(nm)}</div>${handle?`<a href="https://instagram.com/${esc(handle)}" target="_blank" class="cellsub" style="color:var(--primary);text-decoration:none">@${esc(handle)} ↗</a>`:''}</td>
       <td class="mono">${fol?nfmt(fol):'—'}</td>
       <td>${eng||'—'}</td>
+      <td style="max-width:220px;white-space:normal">${cats}</td>
       ${extra.map(c=>`<td class="cellsub" style="max-width:170px;white-space:normal">${esc(row[c])}</td>`).join('')}
       <td><input class="inp" value="${esc(d.fb||'')}" placeholder="reason" onchange="App.markFb('${id}',${i},${ri},this.value)" style="padding:5px 8px;font-size:11.5px"></td>
     </tr>`;
@@ -2539,7 +2545,7 @@ const App={
   markRow2(id,i,ri,st){
     const rd=this.req(id).rounds[i];rd.decisions=rd.decisions||{};rd.decisions[ri]=rd.decisions[ri]||{};
     rd.decisions[ri].status=(rd.decisions[ri].status===st?null:st);
-    const cols=Object.keys(rd.rows[ri]);
+    const cols=rd.cols||Object.keys(rd.rows[ri]||{});
     const tr=document.getElementById('rr_'+i+'_'+ri);
     if(tr)tr.outerHTML=this.reviewRow(id,i,rd.rows[ri],ri,cols);
     const el=document.getElementById('rc_'+i+'_'+ri);
@@ -2549,10 +2555,11 @@ const App={
   markAll(id,i,st){
     const rd=this.req(id).rounds[i];rd.decisions=rd.decisions||{};
     rd.rows.forEach((_,ri)=>{rd.decisions[ri]=rd.decisions[ri]||{};rd.decisions[ri].status=st;});
+    const _cols=rd.cols||(rd.rows[0]?Object.keys(rd.rows[0]):[]);
     const b=document.getElementById('revbody_'+i);
-    if(b)b.innerHTML=rd.rows.map((row,ri)=>this.reviewRow(id,i,row,ri,Object.keys(row))).join('');
+    if(b)b.innerHTML=rd.rows.map((row,ri)=>this.reviewRow(id,i,row,ri,_cols)).join('');
     const g=document.getElementById('revgrid_'+i);
-    if(g)g.innerHTML=rd.rows.map((row,ri)=>this.reviewCard(id,i,row,ri,Object.keys(row))).join('');
+    if(g)g.innerHTML=rd.rows.map((row,ri)=>this.reviewCard(id,i,row,ri,_cols)).join('');
     this.updateRevCount(id,i);
   },
   markRow(id,i,ri,st,btn){const rd=this.req(id).rounds[i];rd.decisions=rd.decisions||{};rd.decisions[ri]=rd.decisions[ri]||{};rd.decisions[ri].status=(rd.decisions[ri].status===st?null:st);const on=rd.decisions[ri].status;btn.parentElement.querySelectorAll('.rb').forEach(b=>b.classList.toggle('on',on&&b.dataset.st===on));this.updateRevCount(id,i);},
@@ -5996,7 +6003,7 @@ Object.assign(App,{
           <button class="btn ghost xs" onclick="App.markAll('${r.id}',${i},null)">Clear</button>
         </div>
         <div id="revprog_${i}" class="revprog"></div>
-        ${(this._revView||'table')==='table'?`<div class="revtable"><table class="tbl"><thead><tr><th style="width:96px">Pick</th><th>Creator</th><th>Followers</th><th>Eng.</th><th>Top categories</th>${show.filter(c=>!/^(name|handle|username|followers?|engagement|categories|category)$/i.test(c)).slice(0,4).map(c=>`<th>${esc(c)}</th>`).join('')}<th style="width:190px">Reason *</th></tr></thead><tbody id="revbody_${i}">
+        ${(this._revView||'table')==='table'?`<div class="revtable"><table class="tbl"><thead><tr><th style="width:96px">Pick</th><th>Creator</th><th>Followers</th><th>Eng.</th><th>Top categories</th>${show.filter(c=>!/^_/.test(c)&&!/^(name|handle|username|followers?|engagement|categories|category|email|platform)$/i.test(c)).slice(0,4).map(c=>`<th>${esc(c[0].toUpperCase()+c.slice(1))}</th>`).join('')}<th style="width:190px">Reason *</th></tr></thead><tbody id="revbody_${i}">
           ${rd.rows.map((row,ri)=>this.reviewRow(r.id,i,row,ri,show)).join('')}
         </tbody></table></div>`:`<div class="revgrid" id="revgrid_${i}">${rd.rows.map((row,ri)=>this.reviewCard(r.id,i,row,ri,show)).join('')}</div>`}
         <div class="divide"></div><div id="revc_${i}" class="cellsub" style="margin-bottom:10px"></div>
