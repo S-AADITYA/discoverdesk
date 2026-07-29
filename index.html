@@ -1055,6 +1055,9 @@ const App={
 
       // Load users
       this.db.users = await this.loadProfiles();
+      // Snapshot so save('users') syncs ONLY changed/removed profiles to the DB.
+      this._userIds = new Set(this.db.users.map(u=>u.id));
+      this._userSnap = {}; this.db.users.forEach(u=>{this._userSnap[u.id]=JSON.stringify(this._userRow(u));});
 
       // Teams (A2). Falls back to empty if the RBAC migration hasn't run.
       try{
@@ -1147,6 +1150,7 @@ const App={
       // requests vanish on the next refresh.
       if(k==='reqs'   && CLOUD){   await this.saveReqsCloud();   continue; }
       if(k==='enq'    && CLOUD){    await this.saveEnqCloud();    continue; }
+      if(k==='users'  && CLOUD){    await this.saveUsersCloud();  continue; }
       if(k==='roster' && CLOUD && !fb.roster){ await this.saveRosterCloud(); continue; }
       if(k==='infl'   && CLOUD && !fb.infl){   await this.saveInflCloud();   continue; }
       await store.set(map[k],this.db[k]);
@@ -1154,6 +1158,31 @@ const App={
     this._lastLocalSave=Date.now();
   },
   userTeam(id){const u=this.user(id);return (u&&u.teamId)||null;},
+  // Requester's name that works even if their profile isn't loaded (cross-department).
+  reqOwnerName(r){return (r&&(this.user(r.requesterId)?.name||r.requesterName))||'—';},
+  // The mutable profile columns we write back. (email/locked/created_at are never touched;
+  // new rows are created via signup, so this only UPDATEs and DELETEs.)
+  _userRow(u){return {name:u.name||'',role:u.role||LEGACY_ROLE[roleKey(u)]||null,role_key:u.roleKey||roleKey(u)||null,department:u.department||null,designation:u.designation||null,status:u.status||'active',perms:u.perms||null,mods:u.mods||null,team_uid:u.teamUid||null,team_id:u.teamId||null,email_prefs:u.emailPrefs||null};},
+  async saveUsersCloud(){
+    this._userSnap=this._userSnap||{};
+    const currentIds=new Set(this.db.users.map(u=>u.id));
+    const removed=[...(this._userIds||new Set())].filter(id=>!currentIds.has(id));
+    const failed=[];
+    for(const u of this.db.users){
+      const row=this._userRow(u);const sig=JSON.stringify(row);
+      if(this._userSnap[u.id]===sig)continue;                 // unchanged → skip
+      const {error}=await SB.from('profiles').update(row).eq('id',u.id);
+      if(error){console.error('saveUsersCloud',u.id,error);failed.push(error);}
+      else this._userSnap[u.id]=sig;
+    }
+    if(removed.length){                                        // genuinely delete removed accounts
+      const {error}=await SB.from('profiles').delete().in('id',removed);
+      if(error){console.error('saveUsersCloud delete',error);failed.push(error);}
+      else removed.forEach(id=>delete this._userSnap[id]);
+    }
+    this._userIds=currentIds;
+    if(failed.length)this.toast('Some people changes were blocked by the server: '+(failed[0].message||failed[0]),'err');
+  },
   // Strip the client-only mirror columns before writing a row's JSON back.
   stripMeta(o){const c={...o};delete c._teamId;delete c.deletedAt;delete c.deletedBy;return c;},
   async saveReqsCloud(){
@@ -2379,7 +2408,7 @@ const App={
     if(!draft&&!campId)return this.toast('Pick a campaign (or create one) — every request must belong to a campaign so nothing gets orphaned.','err');
     if(campId==='__new'){const cn=(document.getElementById('nq_newcampname')&&document.getElementById('nq_newcampname').value.trim())||(brandName+' campaign');const nc={id:uid(),brandId,name:cn,stage:'planning',sheetName:null,sheetRows:[],sheetCols:null,createdAt:now()};this.db.camps.push(nc);this.audit('campaign.create','campaign:'+nc.id,{name:nc.name});await this.save('camps');campId=nc.id;}
     const type=document.getElementById('nq_type').value,assignee=document.getElementById('nq_assignee').value||null,dlv=document.getElementById('nq_deadline').value;
-    const r={id:await this.nextSeq('REQ'),seq:this.db.reqs.length+1,brandId,brandName,campaignId:campId||null,client:this._client,reqType:type,round:type==='sample'?1:+document.getElementById('nq_round').value,niche,fMin:+document.getElementById('nq_fmin').value||0,fMax:+document.getElementById('nq_fmax').value||0,platform:document.getElementById('nq_platform').value.trim(),pType:document.getElementById('nq_ptype').value,sample:document.getElementById('nq_sample').value.trim(),qty:+document.getElementById('nq_qty').value||0,notes:document.getElementById('nq_notes').value.trim(),priority:this._pri||'med',comments:[],brandBudget:+((document.getElementById('nq_budget')||{}).value)||0,internalCost:this.can('bridge')?(+((document.getElementById('nq_icost')||{}).value)||0):0,deadline:dlv?new Date(dlv).getTime():null,requesterId:this.me.id,suggestedCreators:(this._reqPicks||[]).map(pid=>{const c=(this.db.roster||[]).find(x=>x.id===pid);return c?{handle:c.handle,name:c.name,followers:c.followers,category:c.category,city:c.city,source:'sales-suggested',addedBy:this.me.id,addedByName:this.me.name,addedByRole:this.me.role,reason:'Client requested',addedAt:now()}:null;}).filter(Boolean),assigneeId:assignee,status:draft?'draft':'assigned',createdAt:now(),updatedAt:now(),assignedAt:assignee?now():(draft?null:now()),startedAt:null,submittedAt:null,rounds:[],events:[]};
+    const r={id:await this.nextSeq('REQ'),seq:this.db.reqs.length+1,brandId,brandName,campaignId:campId||null,client:this._client,reqType:type,round:type==='sample'?1:+document.getElementById('nq_round').value,niche,fMin:+document.getElementById('nq_fmin').value||0,fMax:+document.getElementById('nq_fmax').value||0,platform:document.getElementById('nq_platform').value.trim(),pType:document.getElementById('nq_ptype').value,sample:document.getElementById('nq_sample').value.trim(),qty:+document.getElementById('nq_qty').value||0,notes:document.getElementById('nq_notes').value.trim(),priority:this._pri||'med',comments:[],brandBudget:+((document.getElementById('nq_budget')||{}).value)||0,internalCost:this.can('bridge')?(+((document.getElementById('nq_icost')||{}).value)||0):0,deadline:dlv?new Date(dlv).getTime():null,requesterId:this.me.id,requesterName:this.me.name,requesterRole:this.roleLabel(this.me),suggestedCreators:(this._reqPicks||[]).map(pid=>{const c=(this.db.roster||[]).find(x=>x.id===pid);return c?{handle:c.handle,name:c.name,followers:c.followers,category:c.category,city:c.city,source:'sales-suggested',addedBy:this.me.id,addedByName:this.me.name,addedByRole:this.me.role,reason:'Client requested',addedAt:now()}:null;}).filter(Boolean),assigneeId:assignee,status:draft?'draft':'assigned',createdAt:now(),updatedAt:now(),assignedAt:assignee?now():(draft?null:now()),startedAt:null,submittedAt:null,rounds:[],events:[]};
     this.pushEvent(r,draft?'Draft created':'Request raised for '+brandName,'create');this.audit('req.create','req:'+r.id,{name:brandName,campaign:this._campName||''});if((r.suggestedCreators||[]).length){r.suggestedCreators.forEach(sc=>this.audit('req.suggest','req:'+r.id,{handle:sc.handle,name:sc.name,source:'sales-suggested'}));}this._reqPicks=[];
     if(!draft&&assignee){this.pushEvent(r,'Assigned to '+this.user(assignee).name,'assign');await this.notify(assignee,'New discovery request assigned',`${r.id} · ${brandName} — ${niche}. Due ${r.deadline?fmtDate(r.deadline):'soon'}.`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned: ${r.id} ${brandName}`,body:`You've been assigned ${r.id} (${brandName} — ${niche}).\nProfiles needed: ${r.qty}. Deadline: ${r.deadline?fmtDate(r.deadline):'TBD'}.\n\n— ${this.me.name}`});}
     this.db.reqs.push(r);
@@ -2610,7 +2639,7 @@ const App={
       this.autoStartClock(r,this.me.id);
     }else{
       r.assignedToId=who;r.assignedById=this.me.id;r.assignedAt=now();
-      r.assigneeId=who;r.status='assigned';
+      r.assigneeId=who;r.assigneeName=this.user(who)?.name||'';r.status='assigned';
     }
   },
   // "Awaiting assignment by {manager}" rather than a blank or "Unassigned".
@@ -2668,7 +2697,7 @@ const App={
     const myDone=mine.filter(r=>r.assigneeId===this.me.id&&r.submittedAt);
     const tats=myDone.map(r=>durH(r.assignedAt,r.submittedAt));const avgTat=tats.length?Math.round(tats.reduce((s,x)=>s+x,0)/tats.length):null;
     const onTime=done.filter(r=>{const l=r.rounds[r.rounds.length-1];return r.deadline&&l&&l.reviewedAt&&l.reviewedAt<=r.deadline;}).length;
-    const card=(r,cta)=>{const late=r.deadline&&r.deadline<now()&&r.status!=='approved';return `<div class="card pad" style="margin-bottom:12px;cursor:pointer;${late?'border-color:#f5cccc':''}" onclick="App.openReq('${r.id}')"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div class="mono cellsub">${r.id}</div><div style="font-family:var(--disp);font-weight:600;font-size:16px;margin:2px 0">${esc(r.brandName)}</div><div class="cellsub">${esc(r.niche)} · ${nfmt(r.fMin)}–${nfmt(r.fMax)} · ${esc(r.pType)}</div><div class="cellsub">Requested by <b>${esc(this.user(r.requesterId)?.name||'—')}</b>${this.brandSiteLink(r,{stop:1,small:1})?' · '+this.brandSiteLink(r,{stop:1,small:1}):''}</div></div><div style="text-align:right">${statusBadge(r.status)}<div style="margin-top:6px">${this.discBadge(r)}</div><div style="margin-top:6px">${this.slaChip(r)}</div></div></div><div class="pill-row" style="margin-top:10px">${this.priBadge(r.priority)}<span class="tag">${r.qty} profiles</span><span class="tag">${esc(r.platform)}</span>${r.rounds.length?`<span class="tag">Round ${r.rounds.length}</span>`:''}${this.flagBadge(r)}</div>${cta?`<div class="actbar"><button class="btn primary sm" onclick="event.stopPropagation();App.openReq('${r.id}')">${svg(IC.up,15)} ${cta}</button>${r.status==='assigned'?`<button class="btn ghost sm" onclick="event.stopPropagation();App.startWork('${r.id}')">Start</button>`:''}</div>`:''}</div>`;};
+    const card=(r,cta)=>{const late=r.deadline&&r.deadline<now()&&r.status!=='approved';return `<div class="card pad" style="margin-bottom:12px;cursor:pointer;${late?'border-color:#f5cccc':''}" onclick="App.openReq('${r.id}')"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div class="mono cellsub">${r.id}</div><div style="font-family:var(--disp);font-weight:600;font-size:16px;margin:2px 0">${esc(r.brandName)}</div><div class="cellsub">${esc(r.niche)} · ${nfmt(r.fMin)}–${nfmt(r.fMax)} · ${esc(r.pType)}</div><div class="cellsub">Requested by <b>${esc(this.reqOwnerName(r))}</b>${this.brandSiteLink(r,{stop:1,small:1})?' · '+this.brandSiteLink(r,{stop:1,small:1}):''}</div></div><div style="text-align:right">${statusBadge(r.status)}<div style="margin-top:6px">${this.discBadge(r)}</div><div style="margin-top:6px">${this.slaChip(r)}</div></div></div><div class="pill-row" style="margin-top:10px">${this.priBadge(r.priority)}<span class="tag">${r.qty} profiles</span><span class="tag">${esc(r.platform)}</span>${r.rounds.length?`<span class="tag">Round ${r.rounds.length}</span>`:''}${this.flagBadge(r)}</div>${cta?`<div class="actbar"><button class="btn primary sm" onclick="event.stopPropagation();App.openReq('${r.id}')">${svg(IC.up,15)} ${cta}</button>${r.status==='assigned'?`<button class="btn ghost sm" onclick="event.stopPropagation();App.startWork('${r.id}')">Start</button>`:''}</div>`:''}</div>`;};
     this.set(`<div class="grid kpis" style="margin-bottom:16px"><div class="card kpi"><div class="ic" style="background:#5847eb20;color:#5847eb">${svg(IC.bolt,19)}</div><div class="v"><span class="cup" data-to="${active.length}">0</span></div><div class="l">To work on</div></div><div class="card kpi"><div class="ic" style="background:#6b3fd420;color:#6b3fd4">${svg(IC.clock,19)}</div><div class="v"><span class="cup" data-to="${waiting.length}">0</span></div><div class="l">Awaiting review</div></div><div class="card kpi"><div class="ic" style="background:#0ea47220;color:#0ea472">${svg(IC.check,19)}</div><div class="v"><span class="cup" data-to="${done.length}">0</span></div><div class="l">Delivered</div></div><div class="card kpi"><div class="ic" style="background:#e0900a20;color:#e0900a">${svg(IC.clock,19)}</div><div class="v">${fmtDur(avgTat)}</div><div class="l">Your avg turnaround</div></div></div>
       <div class="toolbar">${[['all','All'],['overdue','Overdue'],['flagged','Flagged'],['high','High priority']].map(([k,l])=>`<span class="chip ${df===k?'on':''}" onclick="App._dfilter='${k}';App.vDiscovery()">${l}</span>`).join('')}</div>
       <div class="sec-t">Needs your attention</div>${active.length?active.map(r=>card(r,'Upload sheet')).join(''):this.emptyBox('All clear','Nothing matches this filter.','')}
@@ -5659,7 +5688,7 @@ Object.assign(App,{
       notes:document.getElementById('nq_notes').value.trim(),priority:this._pri||'med',comments:[],
       brandBudget:+((document.getElementById('nq_budget')||{}).value)||0,
       internalCost:this.can('bridge')?(+((document.getElementById('nq_icost')||{}).value)||0):0,
-      deadline:dlv?new Date(dlv).getTime():null,requesterId:this.me.id,
+      deadline:dlv?new Date(dlv).getTime():null,requesterId:this.me.id,requesterName:this.me.name,requesterRole:this.roleLabel(this.me),
       suggestedCreators:(this._reqPicks||[]).map(pid=>{const c=(this.db.roster||[]).find(x=>x.id===pid);return c?{handle:c.handle,name:c.name,followers:c.followers,category:c.category,cats:this.catsText(c),city:c.city,source:'sales-suggested',addedBy:this.me.id,addedByName:this.me.name,addedByRole:this.me.role,reason:'Client requested',addedAt:now()}:null;}).filter(Boolean),
       assigneeId:isRaiser?null:assignee,
       routedToManagerId:isRaiser?assignee:null,routedById:(isRaiser&&assignee)?this.me.id:null,routedAt:(isRaiser&&assignee)?now():null,
@@ -5738,7 +5767,7 @@ Object.assign(App,{
       <div class="actbar" style="margin-top:10px">${['low','med','high'].map(p=>`<button class="btn ${r.priority===p||(!r.priority&&p==='med')?'primary':'ghost'} xs" onclick="App.setPriority('${r.id}','${p}')">${p[0].toUpperCase()+p.slice(1)}</button>`).join('')}<span class="cellsub" style="align-self:center;margin-left:4px">priority</span><span style="flex:1"></span>${(this.dept()==='sales'||this.dept()==='kam')?`<button class="btn ghost xs" style="color:var(--danger)" title="Escalate this request to your manager" onclick="App.flagToManager('${r.id}')">${svg(IC.bolt,14)} Flag to manager</button>`:''}<button class="btn ghost xs" title="Copy this request's summary to the clipboard" onclick="App.copyReqSummary('${r.id}')">${svg(IC.copy||IC.report,14)} Copy summary</button></div></div>
       <div class="mbody">${pipe}
         ${ctrl}
-        <div class="specgrid">${spec('Campaign',esc(campNm||'—'))}${(r.brandWebsite||(this.brand(r.brandId)||{}).website)?spec('Website',(()=>{const w=r.brandWebsite||this.brand(r.brandId).website;return `<a href="${esc(w)}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:600;text-decoration:none">${esc(w.replace(/^https?:\/\//,''))} ↗</a>`;})()):''}${spec('Requested by',this.user(r.requesterId)?.name||'—')}${spec('Assigned to',r.assigneeId?this.user(r.assigneeId).name:'<span class="unassigned">Unassigned</span>')}${spec('Selection rounds',r.rounds.length||0)}${spec('Followers',nfmt(r.fMin)+' – '+nfmt(r.fMax))}${spec('Creator type',esc(r.pType||'—'))}${spec('Platform',esc(r.platform||'—'))}${spec('Profiles needed',r.qty||'—')}${spec('Deadline',this.deadlineCell(r)+' '+this.slaChip(r))}${spec('Time in stage',this.agoStr(this.stageSince(r)))}${spec('Turnaround',tat!=null?fmtDur(tat):'in progress')}${r.brandBudget?spec('Brand budget',`₹${nfmt(r.brandBudget)}`):''}${(this.can('bridge')&&r.internalCost)?spec('Internal cost',`₹${nfmt(r.internalCost)}`):''}${(this.can('bridge')&&r.brandBudget&&r.internalCost)?spec('Est. margin',`<span style="color:${r.brandBudget-r.internalCost>=0?'var(--success)':'var(--danger)'}">₹${nfmt(r.brandBudget-r.internalCost)} (${Math.round((r.brandBudget-r.internalCost)/r.brandBudget*100)}%)</span>`):''}${r.sample?spec('Sample ref',linkify(r.sample)):''}</div>
+        <div class="specgrid">${spec('Campaign',esc(campNm||'—'))}${(r.brandWebsite||(this.brand(r.brandId)||{}).website)?spec('Website',(()=>{const w=r.brandWebsite||this.brand(r.brandId).website;return `<a href="${esc(w)}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:600;text-decoration:none">${esc(w.replace(/^https?:\/\//,''))} ↗</a>`;})()):''}${spec('Requested by',esc(this.reqOwnerName(r))+(r.requesterRole?` · <span class="cellsub">${esc(r.requesterRole)}</span>`:''))}${spec('Assigned to',r.assigneeId?esc(this.user(r.assigneeId)?.name||r.assigneeName||'—'):'<span class="unassigned">Unassigned</span>')}${spec('Selection rounds',r.rounds.length||0)}${spec('Followers',nfmt(r.fMin)+' – '+nfmt(r.fMax))}${spec('Creator type',esc(r.pType||'—'))}${spec('Platform',esc(r.platform||'—'))}${spec('Profiles needed',r.qty||'—')}${spec('Deadline',this.deadlineCell(r)+' '+this.slaChip(r))}${spec('Time in stage',this.agoStr(this.stageSince(r)))}${spec('Turnaround',tat!=null?fmtDur(tat):'in progress')}${r.brandBudget?spec('Brand budget',`₹${nfmt(r.brandBudget)}`):''}${(this.can('bridge')&&r.internalCost)?spec('Internal cost',`₹${nfmt(r.internalCost)}`):''}${(this.can('bridge')&&r.brandBudget&&r.internalCost)?spec('Est. margin',`<span style="color:${r.brandBudget-r.internalCost>=0?'var(--success)':'var(--danger)'}">₹${nfmt(r.brandBudget-r.internalCost)} (${Math.round((r.brandBudget-r.internalCost)/r.brandBudget*100)}%)</span>`):''}${r.sample?spec('Sample ref',linkify(r.sample)):''}</div>
         ${r.notes?`<div class="notice">${svg(IC.bolt,16)}<div>${linkify(r.notes)}</div></div>`:''}
         ${this.reqDocsHTML(r)}
         ${(r.suggestedCreators&&r.suggestedCreators.length)?`<div class="sec-t">Client-requested creators <span class="cellsub">(${r.suggestedCreators.length})</span></div><div class="card pad" style="margin-bottom:14px;background:var(--surface-2)"><div class="cellsub" style="margin-bottom:8px">Pre-picked by ${esc(this.user(r.requesterId)?.name||'Sales/KAM')}.${openRd?' <b>Push them into the open round →</b>':''}</div>${r.suggestedCreators.map(sc=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line-2)"><div><b style="font-size:13px">${esc(sc.name||('@'+sc.handle))}</b> <span class="cellsub">${nfmt(sc.followers||0)} · ${esc(sc.cats||sc.category||'—')}</span></div><div style="display:flex;gap:6px;align-items:center"><span class="cellsub">${esc(sc.reason||'')} · ${esc(sc.addedByName||'—')}</span>${(openRd&&this.canFillRound(r))?`<button class="btn ghost xs" onclick="App.roundAdd('${r.id}','${esc(sc.handle)}','client-requested','Client requested').then(()=>App.openReq('${r.id}'))">→ Round ${openRd.round}</button>`:''}</div></div>`).join('')}</div>`:''}
