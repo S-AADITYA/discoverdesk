@@ -5457,7 +5457,14 @@ Object.assign(App,{
      execution (all rounds done). */
   ensureCampaignEnquiry(r){
     if(!r||!this.db.enq)return null;
-    let e=this.db.enq.find(x=>!x.deletedAt&&(x.id===r.enqId||x.convertedRequestId===r.id||(r.campaignId&&x.campaignId===r.campaignId)));
+    const bn=(r.brandName||'').trim().toLowerCase();
+    const cn=(this.campName(r.campaignId)||r.campaignName||'').trim().toLowerCase();
+    // Reuse an existing enquiry — by explicit link, by campaign id, OR by the
+    // brand+campaign NAME (so a manually-registered brand or a duplicated
+    // campaign never spawns a second copy).
+    let e=this.db.enq.find(x=>!x.deletedAt&&(
+      x.id===r.enqId||x.convertedRequestId===r.id||(r.campaignId&&x.campaignId===r.campaignId)||
+      (bn&&cn&&(x.client||'').trim().toLowerCase()===bn&&(x.campaign||'').trim().toLowerCase()===cn)));
     if(e){r.enqId=e.id;e.convertedRequestId=e.convertedRequestId||r.id;if(!e.campaignId)e.campaignId=r.campaignId;this._enqDirty=true;return e;}
     e={id:uid(),client:r.brandName||'',campaign:this.campName(r.campaignId)||r.campaignName||'',contact:'',service:r.niche||'Influencer campaign',budget:'',source:'Campaign',status:'proposal',notes:'Auto-created when discovery started',ownerId:r.requesterId,createdAt:now(),brandId:r.brandId||null,campaignId:r.campaignId||null,convertedRequestId:r.id,website:r.brandWebsite||''};
     this.db.enq.push(e);r.enqId=e.id;this._enqDirty=true;
@@ -5914,7 +5921,7 @@ Object.assign(App,{
       notes:document.getElementById('nq_notes').value.trim(),priority:this._pri||'med',comments:[],
       brandBudget:+((document.getElementById('nq_budget')||{}).value)||0,
       internalCost:this.can('bridge')?(+((document.getElementById('nq_icost')||{}).value)||0):0,
-      deadline:dlv?new Date(dlv).getTime():null,requesterId:this.me.id,requesterName:this.me.name,requesterRole:this.roleLabel(this.me),
+      deadline:dlv?new Date(dlv).getTime():null,enqId:this._enqId||null,requesterId:this.me.id,requesterName:this.me.name,requesterRole:this.roleLabel(this.me),
       suggestedCreators:(this._reqPicks||[]).map(pid=>{const c=(this.db.roster||[]).find(x=>x.id===pid);return c?{handle:c.handle,name:c.name,followers:c.followers,category:c.category,cats:this.catsText(c),city:c.city,source:'sales-suggested',addedBy:this.me.id,addedByName:this.me.name,addedByRole:this.me.role,reason:'Client requested',addedAt:now()}:null;}).filter(Boolean),
       assigneeId:isRaiser?null:assignee,
       routedToManagerId:isRaiser?assignee:null,routedById:(isRaiser&&assignee)?this.me.id:null,routedAt:(isRaiser&&assignee)?now():null,
