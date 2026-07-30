@@ -21,28 +21,39 @@ function encSubject(s) {
   s = String(s || 'DiscoverDesk').replace(/[\r\n]/g, ' ');
   return '=?UTF-8?B?' + Buffer.from(s, 'utf8').toString('base64') + '?=';
 }
-// Clean branded HTML wrapper around the plain-text body.
+// Clean, structured branded HTML. The first line of `text` becomes the event
+// heading; "Label: value" lines render as a details table; the rest as body.
 function htmlWrap(text, subject) {
-  const heading = String(subject || 'Notification').replace(/^\[DiscoverDesk\]\s*/i, '');
-  const lines = String(text || '').split('\n');
-  const bodyHtml = lines.map(l => l.trim() === ''
-    ? '<div style="height:10px;line-height:10px">&nbsp;</div>'
-    : `<div style="margin:2px 0">${linkify(l)}</div>`).join('');
+  const thread = String(subject || '').replace(/^\[[^\]]*\]\s*/, '');
+  const lines = String(text || '').replace(/\r/g, '').split('\n');
+  let i = 0; while (i < lines.length && lines[i].trim() === '') i++;
+  const eventHead = i < lines.length ? lines[i] : (thread || 'Update');
+  const rest = lines.slice(i + 1);
+  const rows = [], paras = [];
+  rest.forEach(l => {
+    const m = l.match(/^([A-Za-z][A-Za-z0-9 /&()·.\-]{0,40}):\s+(.+)$/);
+    if (m) rows.push([m[1], m[2]]); else if (l.trim() !== '') paras.push(l);
+  });
+  const detailHtml = rows.length ? `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:4px 0 2px;background:#fafafc;border:1px solid #eeeef3;border-radius:12px">${rows.map(([k, v], idx) => `<tr><td style="padding:9px 14px;color:#8a8a99;font-size:12px;white-space:nowrap;vertical-align:top;${idx ? 'border-top:1px solid #f0f0f5' : ''}">${esc(k)}</td><td style="padding:9px 14px;color:#22222e;font-size:13.5px;font-weight:600;${idx ? 'border-top:1px solid #f0f0f5' : ''}">${linkify(v)}</td></tr>`).join('')}</table>` : '';
+  const paraHtml = paras.map(p => `<div style="margin:12px 0 0;color:#44444f;font-size:13.5px;line-height:1.65">${linkify(p)}</div>`).join('');
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
 <body style="margin:0;padding:0;background:#f4f4f7">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:26px 12px">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:28px 12px">
     <tr><td align="center">
-      <table role="presentation" width="580" cellpadding="0" cellspacing="0" style="max-width:580px;width:100%;background:#ffffff;border:1px solid #e7e7ef;border-radius:16px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border:1px solid #e7e7ef;border-radius:16px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
         <tr><td style="height:4px;line-height:4px;font-size:0;background:#5847eb;background-image:linear-gradient(90deg,#5847eb,#0ea472)">&nbsp;</td></tr>
-        <tr><td style="padding:22px 30px 2px">
-          <div style="font-weight:700;font-size:14px;color:#5847eb;letter-spacing:.3px">◗ DiscoverDesk</div>
+        <tr><td style="padding:22px 32px 0">
+          <div style="font-weight:700;font-size:13px;color:#5847eb;letter-spacing:.3px">◗ DiscoverDesk</div>
+          <div style="margin-top:3px;color:#9a9aa6;font-size:12px">${esc(thread)}</div>
         </td></tr>
-        <tr><td style="padding:10px 30px 2px">
-          <div style="font-size:19px;font-weight:700;color:#18182a;line-height:1.3">${esc(heading)}</div>
+        <tr><td style="padding:14px 32px 6px">
+          <div style="font-size:20px;font-weight:700;color:#18182a;line-height:1.3">${esc(eventHead)}</div>
         </td></tr>
-        <tr><td style="padding:12px 30px 26px;color:#333340;font-size:14px;line-height:1.65">${bodyHtml}</td></tr>
-        <tr><td style="padding:15px 30px;border-top:1px solid #eeeef3;color:#9a9aa6;font-size:12px;line-height:1.5">
-          DiscoverDesk · Discovery Ops Platform<br>This is an automated notification — manage what you receive under Inbox → Email settings.
+        <tr><td style="padding:8px 32px 4px">${detailHtml}</td></tr>
+        ${paraHtml ? `<tr><td style="padding:0 32px 6px">${paraHtml}</td></tr>` : ''}
+        <tr><td style="padding:20px 32px 22px 32px"></td></tr>
+        <tr><td style="padding:15px 32px;border-top:1px solid #eeeef3;color:#9a9aa6;font-size:12px;line-height:1.5">
+          DiscoverDesk · Discovery Ops Platform<br>Automated notification — manage what you receive under Inbox → Email settings.
         </td></tr>
       </table>
     </td></tr>

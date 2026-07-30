@@ -1687,6 +1687,7 @@ const App={
       await this.notify(pid,`Reminder: ${r.id} needs attention`,`${r.brandName} · ${campNm} — ${f.join(', ')}. Deadline ${r.deadline?fmtDT(r.deadline):'TBD'}.`,'reject',{pref:'assigned',subject:`[DiscoverDesk] Reminder: ${r.id} flagged`,body:`${r.id} (${r.brandName} · ${campNm}) is flagged: ${f.join(', ')}.\nDeadline: ${r.deadline?fmtDT(r.deadline):'TBD'}.\nRaised by ${this.user(r.requesterId)?.name||'—'} · assigned to ${r.assigneeId?this.user(r.assigneeId).name:'nobody yet'}.\n\nPlease action this request.\n— ${this.me.name}`});
     }
     this.pushEvent(r,`Reminder sent to ${people.length} responsible ${people.length===1?'person':'people'} — ${f.join(', ')}`,'reject');
+    this.sendMailChain(r,'reminder');
     if(!quiet){await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast(`Reminder sent to ${people.length} ${people.length===1?'person':'people'}`,'ok');this.renderNav();if(this._openReqId===id)this.openReq(id);}
     return people.length;
   },
@@ -1717,8 +1718,9 @@ const App={
           if(rq)this.db.users.filter(u=>u.status==='active'&&isMgr(u)&&deptOf(u)===deptOf(rq)).forEach(u=>people.add(u.id));
           const campNm=this.campName(r.campaignId)||r.campaignName||'—';
           for(const pid of people){
-            await this.notify(pid,`⚠ ${r.id} flagged`,`${r.brandName} · ${campNm} — ${f.join(', ')}.`,'reject',{pref:'assigned',subject:`[DiscoverDesk] Flagged: ${r.id}`,body:`${r.id} (${r.brandName} · ${campNm}) is now flagged: ${f.join(', ')}.\nDeadline: ${r.deadline?fmtDT(r.deadline):'TBD'}.\nRaised by ${this.user(r.requesterId)?.name||'—'} · assigned to ${r.assigneeId?this.user(r.assigneeId).name:'nobody yet'}.\n\nThis is an automatic alert — please action it.`});
+            await this.notify(pid,`⚠ ${r.id} flagged`,`${r.brandName} · ${campNm} — ${f.join(', ')}.`,'reject',null);
           }
+          this.sendMailChain(r,'flagged');   // the email goes on the request's chain (the 4 people)
         }
       }else if(r.flagNotifiedSig){r.flagNotifiedSig=null;changed=true;}
     }
@@ -2098,7 +2100,7 @@ const App={
         • the assigned Discovery Employee
         • the permanent (owner) admin
      Nobody else (no reporting Sales/KAM manager, no other admins). */
-  mailChainSubject(r){const camp=r.campaignName||this.campName(r.campaignId)||'Campaign';return `[Discovery] ${r.brandName||'Brand'} — ${camp}`;},
+  mailChainSubject(r){const camp=r.campaignName||this.campName(r.campaignId)||'Campaign';return `${r.brandName||'Brand'} > ${camp} -- Discovery ( Internal )`;},
   mailRecipients(r){
     const to=new Set(),cc=new Set();
     // TO: requester (Sales/KAM), Discovery Manager, assigned Discovery Employee.
@@ -2119,12 +2121,18 @@ const App={
     const facts=`Brand: ${r.brandName}\nCampaign: ${camp}\nRaised by: ${who}\nDiscovery: ${disc}\nDeadline: ${r.deadline?fmtDT(r.deadline):'TBD'}`;
     let head,body;
     const brief=`\nNiche: ${r.niche||'—'} · Profiles needed: ${r.qty||'—'}${r.category?'\nCategory: '+r.category:''}${r.location?'\nLocation: '+r.location:''}${r.language?'\nLanguage: '+r.language:''}${r.pType?'\nCreator type: '+r.pType:''}${(r.fMin||r.fMax)?'\nFollowers: '+nfmt(r.fMin||0)+' – '+nfmt(r.fMax||0):''}${r.perCreatorBudget?'\nPer-creator budget: ₹'+nfmt(r.perCreatorBudget):''}`;
+    const by=this.me?.name||'—';
     if(phase==='raised'){head='New discovery request raised';body=`${facts}${brief}\n\nThis thread carries every update for this request — please keep replies here.`;}
-    else if(phase==='assigned'){head='Assigned to discovery';body=`${facts}${brief}\n\n${disc} will run discovery on this request.`;}
-    else if(phase==='submitted'){const rd=this.submittedRound(r)||{round:rounds};head=`Round ${rd.round} submitted for selection`;body=`${facts}\n\nRound ${rd.round} (${rd.total||0} profiles) has been submitted. The requester now selects or rejects each creator.`;}
-    else if(phase==='nextround'){head=`Round ${rounds} requested`;body=`${facts}\n\nThe requester has requested round ${rounds} with a fresh deadline. Discovery adds more creators and submits the round.`;}
-    else if(phase==='delivered'){head='Discovery completed — moving to execution';body=`${facts}\nRounds run: ${rounds}\n\nDiscovery is complete for this campaign.`;}
-    else if(phase==='execution'){head='Campaign enquiry closed — now in execution';body=`${facts}\nRounds run: ${rounds}\n\nThe campaign enquiry has been closed by ${this.me.name}. This campaign has moved to execution.`;}
+    else if(phase==='routed'){head='Routed to Discovery Manager';body=`${facts}\n\nRouted by ${by} to ${this.user(r.routedToManagerId)?.name||'the Discovery Manager'}.`;}
+    else if(phase==='assigned'){head='Assigned to discovery';body=`${facts}${brief}\n\n${by} assigned ${disc} to run discovery on this request.`;}
+    else if(phase==='started'){const rd=this.openRound(r)||{round:1};head='Discovery started';body=`${facts}\n\nThe discovery clock is running — round ${rd.round} is open. Deadline: ${r.deadline?fmtDT(r.deadline):'TBD'}.`;}
+    else if(phase==='submitted'){const rd=this.submittedRound(r)||{round:rounds};head=`Round ${rd.round} submitted for selection`;body=`${facts}\n\nRound ${rd.round} (${rd.total||0} profiles) has been submitted by ${disc}. The requester now selects or rejects each creator.`;}
+    else if(phase==='selected'){head='Creators selected & pushed to sheets';body=`${facts}\n\n${by} selected creators from the latest round and pushed them to the brand sheet.`;}
+    else if(phase==='nextround'){head=`Round ${rounds} requested`;body=`${facts}\n\n${by} requested round ${rounds} with a fresh deadline (${r.deadline?fmtDT(r.deadline):'TBD'}). Discovery adds more creators and submits.`;}
+    else if(phase==='delivered'){head='Discovery completed — moving to execution';body=`${facts}\nRounds run: ${rounds}\n\nDiscovery was ended by ${by}. This campaign is complete.`;}
+    else if(phase==='execution'){head='Campaign enquiry closed — now in execution';body=`${facts}\nRounds run: ${rounds}\n\n${by} closed the campaign enquiry. This campaign has moved to execution.`;}
+    else if(phase==='reminder'){const f=this.flags(r);head='⚑ Reminder — action needed';body=`${facts}\nFlags: ${f.join(', ')||'—'}\n\n${by} sent a reminder. Please action this request.`;}
+    else if(phase==='flagged'){const f=this.flags(r);head='⚠ Request flagged';body=`${facts}\nFlags: ${f.join(', ')||'—'}\n\nThis request has tripped a red flag — please action it.`;}
     else {head='Update';body=facts;}
     try{await fetch(API('/api/notify'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,cc,subject,text:`${head}\n\n${body}`})});}
     catch(e){console.error('sendMailChain',e);}
@@ -2773,7 +2781,7 @@ const App={
     if(k==='discovery_manager')return 'As a Discovery Manager you route this to a Discovery Employee — or assign it to yourself.';
     return 'Pick who delivers this brief.';
   },
-  async assignReq(id){const r=this.req(id);const who=document.getElementById('assignSel').value;const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');this.recordHop(r,who);if(this._enqDirty){this._enqDirty=false;await this.save('enq');}this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');await this.notify(who,'Request assigned to you',`${r.id} · ${r.brandName}${r.discoveryStartedAt?' — discovery clock started':''}`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned ${r.id}`,body:`You've been assigned ${r.id} (${r.brandName}).${r.discoveryStartedAt?' The discovery clock has started — add creators and submit each round.':''}`});await this.save('reqs');this.syncActsLocal();await this.save('acts');if(r.assigneeId&&!(this.dept()==='sales'||this.dept()==='kam'))this.sendMailChain(r,'assigned');this.toast(r.discoveryStartedAt?'Assigned — discovery clock started ⏱':'Assigned','ok');this.renderNav();this.openReq(id);},
+  async assignReq(id){const r=this.req(id);const who=document.getElementById('assignSel').value;const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');this.recordHop(r,who);if(this._enqDirty){this._enqDirty=false;await this.save('enq');}this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');await this.notify(who,'Request assigned to you',`${r.id} · ${r.brandName}${r.discoveryStartedAt?' — discovery clock started':''}`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned ${r.id}`,body:`You've been assigned ${r.id} (${r.brandName}).${r.discoveryStartedAt?' The discovery clock has started — add creators and submit each round.':''}`});await this.save('reqs');this.syncActsLocal();await this.save('acts');if(this.dept()==='sales'||this.dept()==='kam'){if(r.routedToManagerId)this.sendMailChain(r,'routed');}else if(r.assigneeId)this.sendMailChain(r,'assigned');this.toast(r.discoveryStartedAt?'Assigned — discovery clock started ⏱':'Assigned','ok');this.renderNav();this.openReq(id);},
   async publishDraft(id){const r=this.req(id);r.status='assigned';this.pushEvent(r,'Request published','create');await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Published','ok');this.renderNav();this.openReq(id);},
   async startWork(id){const r=this.req(id);r.status='in_progress';r.startedAt=now();this.pushEvent(r,'Started discovery','info');await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Marked in discovery','ok');this.openReq(id);},
   wireDrop(id){const dz=document.getElementById('dropZone');if(!dz)return;['dragover','dragenter'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.add('drag');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.remove('drag');}));dz.addEventListener('drop',ev=>{const f=ev.dataTransfer.files[0];if(f)this.parseSheet(f,id);});},
@@ -5419,6 +5427,7 @@ Object.assign(App,{
     this.audit('req.discovery.start','req:'+r.id,{name:r.brandName,campaign:this.campName(r.campaignId)});
     await this.save('reqs');if(this._enqDirty){this._enqDirty=false;await this.save('enq');}this.syncActsLocal();await this.save('acts');
     if(r.assigneeId&&r.assigneeId!==this.me.id)await this.notify(r.assigneeId,'Discovery started ⏱',`${r.id} · ${r.brandName} — ${this.campName(r.campaignId)}. The clock is running, round ${(this.openRound(r)||{}).round} is open.`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Discovery started: ${r.id}`,body:`${this.me.name} started discovery on ${r.id} (${r.brandName} · ${this.campName(r.campaignId)}). Round ${(this.openRound(r)||{}).round} is open — add creators and submit the round when ready.`});
+    this.sendMailChain(r,'started');
     this.toast('Discovery started — timer running ⏱','ok');this.renderNav();this.openReq(id);
   },
 
@@ -5489,6 +5498,7 @@ Object.assign(App,{
     this.audit('round.next','req:'+r.id,{name:r.brandName,campaign:this.campName(r.campaignId),field:'round '+nrd.round});
     if(r.assigneeId&&r.assigneeId!==this.me.id)await this.notify(r.assigneeId,`Round ${nrd.round} opened`,`${r.id} · ${r.brandName} — ${this.campName(r.campaignId)} — more profiles requested.`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Round ${nrd.round}: ${r.id}`,body:`${this.me.name} opened round ${nrd.round} on ${r.id}. Add more creators and submit.`});
     await this.save('reqs');this.syncActsLocal();await this.save('acts');
+    this.sendMailChain(r,'nextround');
     this.toast(`Round ${nrd.round} opened`,'ok');this.renderNav();this.openReq(id);
   },
 
@@ -6200,6 +6210,7 @@ Object.assign(App,{
       this.pushEvent(r,`Round ${rd.round} approved — ${rd.approvedCount} selected${rej.length?', '+rej.length+' rejected':''} · ${flow.sheet} → ${r.brandName} sheet, ${flow.roster} → Roster`,'approve');
       this.audit('round.approve','req:'+r.id,{name:r.brandName,campaign:campNm,field:'round '+rd.round+' · '+rd.approvedCount+' selected'});
       if(r.assigneeId)await this.notify(r.assigneeId,'Profiles selected 🎉',`${r.id} · ${r.brandName} — ${campNm} — ${rd.approvedCount} selected.`,'approve',{pref:'decision',subject:`[DiscoverDesk] Selected: ${r.id}`,body:`Round ${rd.round} of ${r.id} (${r.brandName} · ${campNm}) — ${rd.approvedCount} selected. Nice work.`});
+      this.sendMailChain(r,'selected');
       this.toast(`${flow.sheet} added to ${r.brandName} · ${campNm}${flow.roster?` · ${flow.roster} new in Roster`:''}`,'ok');this.confetti();
       if(this.discRunning(r))this.toast('Selected pushed to sheets. Request another round for more, or click "End discovery" when fully filled.','ok');
       this.fireWebhook('round.approved',{id:r.id,brand:r.brandName,campaign:campNm,round:rd.round,delivered:rd.approvedCount});
