@@ -1650,15 +1650,17 @@ const App={
   stageSince(r){const map={assigned:r.assignedAt,in_progress:r.startedAt,under_review:r.submittedAt,rejected:r.updatedAt,submitted:r.submittedAt};return map[r.status]||r.updatedAt||r.createdAt;},
   slaChip(r){
     if(r.status==='approved')return '<span class="sla ok">Delivered</span>';
+    if(this.submittedRound(r))return '<span class="sla ok">Submitted</span>';
+    if(this.discRunning(r)&&!this.openRound(r))return '<span class="sla ok">Next round</span>';
     if(!r.deadline)return '';
     const left=r.deadline-now();const h=left/36e5;
-    if(left<0)return `<span class="sla late"><span class="ld"></span>${Math.ceil(-h/24)}d overdue</span>`;
+    if(left<0)return this.isOverdue(r)?`<span class="sla late"><span class="ld"></span>${Math.ceil(-h/24)}d overdue</span>`:'';
     if(h<=24)return `<span class="sla warn"><span class="ld"></span>${Math.max(1,Math.round(h))}h left</span>`;
     return `<span class="sla ok">${Math.ceil(h/24)}d left</span>`;
   },
   agoStr(ms){const s=Math.round((now()-ms)/1000);if(s<60)return s+'s ago';const m=Math.round(s/60);if(m<60)return m+'m ago';const h=Math.round(m/60);if(h<24)return h+'h ago';return Math.round(h/24)+'d ago';},
   /* ---- red flags & priority ---- */
-  flags(r){const f=[];if(!r||r.status==='approved'||r.status==='draft')return f;if(r.deadline&&r.deadline<now())f.push('Overdue');const rej=(r.rounds||[]).filter(x=>x.decision==='rejected').length;if(rej>=2)f.push(rej+' rejections');if(r.status==='under_review'&&r.submittedAt&&(now()-r.submittedAt)>3*864e5)f.push('Review stalled');if(!r.assigneeId&&r.status!=='draft')f.push('Unassigned');if(r.priority==='high'&&r.status!=='approved'&&r.deadline&&r.deadline-now()<2*864e5)f.push('High-pri due soon');return f;},
+  flags(r){const f=[];if(!r||r.status==='approved'||r.status==='draft')return f;if(this.isOverdue(r))f.push('Overdue');const rej=(r.rounds||[]).filter(x=>x.decision==='rejected').length;if(rej>=2)f.push(rej+' rejections');if(r.status==='under_review'&&r.submittedAt&&(now()-r.submittedAt)>3*864e5)f.push('Review stalled');if(!r.assigneeId&&r.status!=='draft')f.push('Unassigned');if(r.priority==='high'&&this.discRunning(r)&&this.openRound(r)&&r.deadline&&r.deadline-now()<2*864e5&&r.deadline-now()>-1)f.push('High-pri due soon');return f;},
   flaggedReqs(){return this.db.reqs.filter(r=>this.flags(r).length);},
   redCount(){return this.flaggedReqs().length;},
   priBadge(p){p=p||'med';return `<span class="pri ${p}">${svg(IC.bolt,11)}${p[0].toUpperCase()+p.slice(1)}</span>`;},
@@ -3240,10 +3242,13 @@ const App={
   renderReqPicks(){const box=document.getElementById('nq_rpicked');if(!box)return;const picks=(this._reqPicks||[]).map(id=>(this.db.roster||[]).find(r=>r.id===id)).filter(Boolean);box.innerHTML=picks.length?`<div class="cellsub" style="margin-bottom:5px">${picks.length} client-requested creator${picks.length!==1?'s':''}:</div>`+picks.map(r=>`<span class="tag" style="margin:2px">${esc(r.name||('@'+r.handle))} <span onclick="App.reqUnpick('${r.id}')" style="cursor:pointer;font-weight:700">×</span></span>`).join(''):'';},
   
   deadlineTimer(r){
+    if(r.status==='approved')return '<span class="badge b-confirmed">Delivered</span>';
+    if(this.submittedRound(r))return '<span class="dltimer">Round submitted · deadline met</span>';
+    if(this.discRunning(r)&&!this.openRound(r))return '<span class="dltimer">Awaiting next round</span>';
     if(!r.deadline)return '';
-    const d=r.deadline-now();const done=r.status==='approved';
-    if(done)return '<span class="badge b-confirmed">Delivered</span>';
+    const d=r.deadline-now();
     const over=d<0;const ad=Math.abs(d);
+    if(over&&!this.isOverdue(r))return '';
     const days=Math.floor(ad/864e5),hrs=Math.floor(ad%864e5/36e5),mins=Math.floor(ad%36e5/6e4);
     let txt;
     if(days>0)txt=days+'d '+hrs+'h';
@@ -5367,6 +5372,11 @@ Object.assign(App,{
   openRound(r){return (r.rounds||[]).find(rd=>this.roundStatus(rd)==='open')||null;},
   submittedRound(r){return (r.rounds||[]).find(rd=>this.roundStatus(rd)==='submitted')||null;},
   discRunning(r){return !!(r.discoveryStartedAt&&!r.discoveryEndedAt);},
+  // Overdue ONLY while discovery is actively working an OPEN round past its
+  // deadline. Once a round is submitted the deadline is met (timer paused) and a
+  // NEW deadline arrives with the next round — so submitted / between-rounds /
+  // delivered are never "overdue" and never trigger overdue emails.
+  isOverdue(r){if(!r||!r.deadline||r.deadline>=now())return false;if(r.status==='approved'||r.status==='draft')return false;return this.discRunning(r)&&!!this.openRound(r);},
   // A small at-a-glance badge so anyone who can see a request also sees its discovery state.
   discBadge(r){
     if(!r||r.status==='draft')return '';

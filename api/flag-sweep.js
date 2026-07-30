@@ -8,15 +8,23 @@ const { createClient } = require('@supabase/supabase-js');
 const CHAIN_SUBJECT = d => `${d.brandName || 'Brand'} > ${d.campaignName || 'Campaign'} -- Discovery ( Internal )`;
 const nfmt = n => { n = +n || 0; return n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(0) + 'K' : String(n); };
 
+const roundStatus = rd => rd.status || (rd.decision ? 'decided' : 'submitted');
+const openRound = d => (d.rounds || []).some(rd => roundStatus(rd) === 'open');
+const discRunning = d => !!(d.discoveryStartedAt && !d.discoveryEndedAt);
+// Overdue ONLY while discovery is actively working an OPEN round past its
+// deadline. Submitted / between-rounds / delivered are never overdue — the
+// deadline is met on submit and a new one comes with the next round.
+const isOverdue = (d, now) => !!(d.deadline && d.deadline < now && d.status !== 'approved' && d.status !== 'draft' && discRunning(d) && openRound(d));
+
 function flagsOf(d, now) {
   const f = [];
   if (!d || d.status === 'approved' || d.status === 'draft') return f;
-  if (d.deadline && d.deadline < now) f.push('Overdue');
+  if (isOverdue(d, now)) f.push('Overdue');
   const rej = (d.rounds || []).filter(x => x.decision === 'rejected').length;
   if (rej >= 2) f.push(rej + ' rejections');
   if (d.status === 'under_review' && d.submittedAt && (now - d.submittedAt) > 3 * 864e5) f.push('Review stalled');
   if (!d.assigneeId && !d.assignedToId && d.status !== 'draft') f.push('Unassigned');
-  if (d.priority === 'high' && d.deadline && d.deadline - now < 2 * 864e5 && d.deadline - now > -1) f.push('High-pri due soon');
+  if (d.priority === 'high' && discRunning(d) && openRound(d) && d.deadline && d.deadline - now < 2 * 864e5 && d.deadline - now > -1) f.push('High-pri due soon');
   return f;
 }
 
