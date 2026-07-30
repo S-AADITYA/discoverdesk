@@ -2089,31 +2089,42 @@ const App={
   },
   mailto(n){if(!n.email)return;const url='mailto:'+encodeURIComponent(n.email.to)+'?subject='+encodeURIComponent(n.email.subject)+'&body='+encodeURIComponent(n.email.body);window.open(url,'_blank');},
   /* ---- Discovery mail chain ----
-     One thread per campaign. Subject is stable so email clients group replies.
-     TO = the requester (Sales/KAM) + the assigned discovery person.
-     CC = every permanent admin, all admins, the Sales head (sales_manager),
-          the KAM head (kam_manager) and the Discovery Manager(s). */
-  mailChainSubject(r){return `MHS <> ${r.brandName||'Brand'} <> ${r.campaignName||this.campName?.(r.campaignId)||'Campaign'} -- Discovery Mail Chain`;},
+     One email thread per request. The subject is IDENTICAL on every event so
+     Gmail/Outlook group them into a single conversation:
+        "<Brand> <> <Campaign> -- Discovery Chain"
+     TO = the Sales/KAM who raised it + the Discovery Manager + the Discovery
+          Employee assigned. CC = the requester's Sales/KAM Manager + the
+          permanent (owner) admin — both automatically. */
+  mailChainSubject(r){const camp=r.campaignName||this.campName(r.campaignId)||'Campaign';return `${r.brandName||'Brand'} <> ${camp} -- Discovery Chain`;},
   mailRecipients(r){
     const active=this.db.users.filter(u=>u.status==='active'&&u.email);
-    const to=[];
-    const owner=this.user(r.requesterId); if(owner&&owner.email)to.push(owner.email);
-    const disc=(r.assigneeId||r.assignedToId)&&this.user(r.assigneeId||r.assignedToId); if(disc&&disc.email)to.push(disc.email);
-    const cc=new Set();
+    const to=new Set(),cc=new Set();
+    [r.requesterId,r.routedToManagerId,r.assigneeId,r.assignedToId].forEach(id=>{const u=id&&this.user(id);if(u&&u.email&&u.status==='active')to.add(u.email);});
+    const req=this.user(r.requesterId),dep=req?deptOf(req):null;
     active.forEach(u=>{const k=roleKey(u);
-      if((k==='admin')||(k==='admin'&&u.locked)||k==='sales_manager'||k==='kam_manager'||k==='discovery_manager')cc.add(u.email);});
-    const toSet=new Set(to); toSet.forEach(e=>cc.delete(e));
-    return {to:[...toSet],cc:[...cc]};
+      if(dep&&((dep==='sales'&&k==='sales_manager')||(dep==='kam'&&k==='kam_manager')))cc.add(u.email);   // reporting manager
+      if(this.isPrimary(u))cc.add(u.email);});                                                            // permanent admin
+    to.forEach(e=>cc.delete(e));
+    return {to:[...to],cc:[...cc]};
   },
   async sendMailChain(r,phase){
     if(!CLOUD||!r)return;
     const {to,cc}=this.mailRecipients(r); if(!to.length&&!cc.length)return;
-    const subject=this.mailChainSubject(r);
+    const subject=this.mailChainSubject(r);   // stable across the whole thread
+    const camp=r.campaignName||this.campName(r.campaignId)||'—';
     const who=this.user(r.requesterId)?.name||'—';
-    const body=phase==='raised'
-      ?`A new discovery request has been raised.\n\nBrand: ${r.brandName}\nCampaign: ${r.campaignName||'—'}\nNiche: ${r.niche||'—'}\nProfiles needed: ${r.qty||'—'}\nDeadline: ${r.deadline?fmtDate(r.deadline):'TBD'}\nRaised by: ${who}\n\nReply on this thread to keep the whole discovery conversation for this campaign in one place.`
-      :`Discovery profiles have been submitted for review.\n\nBrand: ${r.brandName}\nCampaign: ${r.campaignName||'—'}\nRound: ${(r.rounds&&r.rounds.length)||1}\nDelivered by: ${this.user(r.assigneeId)?.name||'—'}\nRequested by: ${who}\n\nReply on this thread.`;
-    try{await fetch(API('/api/notify'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,cc,subject,text:body})});}
+    const disc=this.user(r.assigneeId||r.assignedToId)?.name||'not yet assigned';
+    const rounds=(r.rounds||[]).length;
+    const facts=`Brand: ${r.brandName}\nCampaign: ${camp}\nRaised by: ${who}\nDiscovery: ${disc}\nDeadline: ${r.deadline?fmtDT(r.deadline):'TBD'}`;
+    let head,body;
+    const brief=`\nNiche: ${r.niche||'—'} · Profiles needed: ${r.qty||'—'}${r.category?'\nCategory: '+r.category:''}${r.location?'\nLocation: '+r.location:''}${r.language?'\nLanguage: '+r.language:''}${r.pType?'\nCreator type: '+r.pType:''}${(r.fMin||r.fMax)?'\nFollowers: '+nfmt(r.fMin||0)+' – '+nfmt(r.fMax||0):''}${r.perCreatorBudget?'\nPer-creator budget: ₹'+nfmt(r.perCreatorBudget):''}`;
+    if(phase==='raised'){head='New discovery request raised';body=`${facts}${brief}\n\nThis thread carries every update for this request — please keep replies here.`;}
+    else if(phase==='assigned'){head='Assigned to discovery';body=`${facts}${brief}\n\n${disc} will run discovery on this request.`;}
+    else if(phase==='submitted'){const rd=this.submittedRound(r)||{round:rounds};head=`Round ${rd.round} submitted for selection`;body=`${facts}\n\nRound ${rd.round} (${rd.total||0} profiles) has been submitted. The requester now selects or rejects each creator.`;}
+    else if(phase==='nextround'){head=`Round ${rounds} requested`;body=`${facts}\n\nThe requester has requested round ${rounds} with a fresh deadline. Discovery adds more creators and submits the round.`;}
+    else if(phase==='delivered'){head='Discovery completed — moving to execution';body=`${facts}\nRounds run: ${rounds}\n\nDiscovery is complete for this campaign.`;}
+    else {head='Update';body=facts;}
+    try{await fetch(API('/api/notify'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,cc,subject,text:`${head}\n\n${body}`})});}
     catch(e){console.error('sendMailChain',e);}
   },
 
@@ -2760,7 +2771,7 @@ const App={
     if(k==='discovery_manager')return 'As a Discovery Manager you route this to a Discovery Employee — or assign it to yourself.';
     return 'Pick who delivers this brief.';
   },
-  async assignReq(id){const r=this.req(id);const who=document.getElementById('assignSel').value;const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');this.recordHop(r,who);if(this._enqDirty){this._enqDirty=false;await this.save('enq');}this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');await this.notify(who,'Request assigned to you',`${r.id} · ${r.brandName}${r.discoveryStartedAt?' — discovery clock started':''}`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned ${r.id}`,body:`You've been assigned ${r.id} (${r.brandName}).${r.discoveryStartedAt?' The discovery clock has started — add creators and submit each round.':''}`});await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast(r.discoveryStartedAt?'Assigned — discovery clock started ⏱':'Assigned','ok');this.renderNav();this.openReq(id);},
+  async assignReq(id){const r=this.req(id);const who=document.getElementById('assignSel').value;const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');this.recordHop(r,who);if(this._enqDirty){this._enqDirty=false;await this.save('enq');}this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');await this.notify(who,'Request assigned to you',`${r.id} · ${r.brandName}${r.discoveryStartedAt?' — discovery clock started':''}`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned ${r.id}`,body:`You've been assigned ${r.id} (${r.brandName}).${r.discoveryStartedAt?' The discovery clock has started — add creators and submit each round.':''}`});await this.save('reqs');this.syncActsLocal();await this.save('acts');if(r.assigneeId&&!(this.dept()==='sales'||this.dept()==='kam'))this.sendMailChain(r,'assigned');this.toast(r.discoveryStartedAt?'Assigned — discovery clock started ⏱':'Assigned','ok');this.renderNav();this.openReq(id);},
   async publishDraft(id){const r=this.req(id);r.status='assigned';this.pushEvent(r,'Request published','create');await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Published','ok');this.renderNav();this.openReq(id);},
   async startWork(id){const r=this.req(id);r.status='in_progress';r.startedAt=now();this.pushEvent(r,'Started discovery','info');await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Marked in discovery','ok');this.openReq(id);},
   wireDrop(id){const dz=document.getElementById('dropZone');if(!dz)return;['dragover','dragenter'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.add('drag');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.remove('drag');}));dz.addEventListener('drop',ev=>{const f=ev.dataTransfer.files[0];if(f)this.parseSheet(f,id);});},
@@ -5427,6 +5438,7 @@ Object.assign(App,{
     // when the campaign moves to execution (see endCampaignEnquiry).
     await this.save('reqs');this.syncActsLocal();await this.save('acts');
     if(r.assigneeId&&r.assigneeId!==this.me.id)await this.notify(r.assigneeId,'Discovery closed ✅',`${r.id} · ${r.brandName} — closed after ${r.rounds.length} round(s).`,'approve',{pref:'decision',subject:`[DiscoverDesk] Closed: ${r.id}`,body:`${this.me.name} closed discovery on ${r.id}.`});
+    this.sendMailChain(r,'delivered');
     this.toast('Discovery closed ✅ — end the campaign enquiry when it moves to execution.','ok');this.confetti();this.renderNav();this.openReq(id);
   },
   /* The campaign enquiry is auto-created/linked when the first round opens, and
@@ -5637,7 +5649,7 @@ Object.assign(App,{
     this.toast(`Round ${rd.round} submitted — ${rd.total} profiles sent for selection`,'ok');
     this.renderNav();this.openReq(reqId);
     this.fireWebhook('round.submitted',{id:r.id,brand:r.brandName,campaign:this.campName(r.campaignId),round:rd.round,profiles:rd.total,by:this.me.name});
-    this.sendMailChain(r,'sheet');
+    this.sendMailChain(r,'submitted');
   },
 
   /* upload merges INTO the open round instead of creating a new one */
@@ -6203,6 +6215,7 @@ Object.assign(App,{
       if(r.assigneeId)await this.notify(r.assigneeId,`Round ${nrd.round} opened`,`${r.id} · ${r.brandName} — ${campNm} — ${rej.length?rej.length+' to replace':'more profiles needed'}.`,'reject',{pref:'decision',subject:`[DiscoverDesk] Round ${nrd.round}: ${r.id}`,body:(rej.length?`${rej.length} creators in round ${rd.round} of ${r.id} (${r.brandName} · ${campNm}) were rejected:\n${rej.map(x=>'• '+this.rowLabel(x.row,rd.cols)+' — '+x.fb).join('\n')}\n\n`:`${rd.approvedCount} creators were selected in round ${rd.round} of ${r.id} (${r.brandName} · ${campNm}); the requester needs more profiles.\n\n`)+`Round ${nrd.round} is now open — add ${rej.length?'replacements':'more creators'} and submit.`});
       this.toast(`Round ${nrd.round} opened${rej.length?' for replacements':' — add more creators'}${flow&&flow.sheet?` · ${flow.sheet} pushed to sheets`:''}`,'ok');
       this.fireWebhook('round.next',{id:r.id,brand:r.brandName,campaign:campNm,round:rd.round,rejected:rej.length,selected:rd.approvedCount,nextRound:nrd.round});
+      this.sendMailChain(r,'nextround');
     }
     await this.save('reqs');this.syncActsLocal();await this.save('acts');this.renderNav();
     if(this.view==='review')this.vReview();else if(this.view==='requests')this.vRequests();
