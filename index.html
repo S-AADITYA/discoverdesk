@@ -2098,7 +2098,7 @@ const App={
         • the assigned Discovery Employee
         • the permanent (owner) admin
      Nobody else (no reporting Sales/KAM manager, no other admins). */
-  mailChainSubject(r){const camp=r.campaignName||this.campName(r.campaignId)||'Campaign';return `${r.brandName||'Brand'} <> ${camp} -- Discovery Chain`;},
+  mailChainSubject(r){const camp=r.campaignName||this.campName(r.campaignId)||'Campaign';return `[Discovery] ${r.brandName||'Brand'} — ${camp}`;},
   mailRecipients(r){
     const to=new Set(),cc=new Set();
     // TO: requester (Sales/KAM), Discovery Manager, assigned Discovery Employee.
@@ -2124,6 +2124,7 @@ const App={
     else if(phase==='submitted'){const rd=this.submittedRound(r)||{round:rounds};head=`Round ${rd.round} submitted for selection`;body=`${facts}\n\nRound ${rd.round} (${rd.total||0} profiles) has been submitted. The requester now selects or rejects each creator.`;}
     else if(phase==='nextround'){head=`Round ${rounds} requested`;body=`${facts}\n\nThe requester has requested round ${rounds} with a fresh deadline. Discovery adds more creators and submits the round.`;}
     else if(phase==='delivered'){head='Discovery completed — moving to execution';body=`${facts}\nRounds run: ${rounds}\n\nDiscovery is complete for this campaign.`;}
+    else if(phase==='execution'){head='Campaign enquiry closed — now in execution';body=`${facts}\nRounds run: ${rounds}\n\nThe campaign enquiry has been closed by ${this.me.name}. This campaign has moved to execution.`;}
     else {head='Update';body=facts;}
     try{await fetch(API('/api/notify'),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to,cc,subject,text:`${head}\n\n${body}`})});}
     catch(e){console.error('sendMailChain',e);}
@@ -5466,6 +5467,7 @@ Object.assign(App,{
     this.pushEvent(r,`Campaign enquiry ended by ${this.me.name} — moved to execution`,'approve');
     this.audit('enq.end','enq:'+e.id,{name:e.client,campaign:e.campaign});
     await this.save('enq');await this.save('reqs');this.syncActsLocal();await this.save('acts');
+    this.sendMailChain(r,'execution');
     this.toast('Campaign enquiry closed — moved to execution 🎯','ok');this.renderNav();this.openReq(id);
   },
 
