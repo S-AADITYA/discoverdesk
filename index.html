@@ -2092,18 +2092,19 @@ const App={
      One email thread per request. The subject is IDENTICAL on every event so
      Gmail/Outlook group them into a single conversation:
         "<Brand> <> <Campaign> -- Discovery Chain"
-     TO = the Sales/KAM who raised it + the Discovery Manager + the Discovery
-          Employee assigned. CC = the requester's Sales/KAM Manager + the
-          permanent (owner) admin — both automatically. */
+     Recipients — ONLY these four:
+        • the Sales/KAM person who raised it (requester)
+        • the Discovery Manager
+        • the assigned Discovery Employee
+        • the permanent (owner) admin
+     Nobody else (no reporting Sales/KAM manager, no other admins). */
   mailChainSubject(r){const camp=r.campaignName||this.campName(r.campaignId)||'Campaign';return `${r.brandName||'Brand'} <> ${camp} -- Discovery Chain`;},
   mailRecipients(r){
-    const active=this.db.users.filter(u=>u.status==='active'&&u.email);
     const to=new Set(),cc=new Set();
+    // TO: requester (Sales/KAM), Discovery Manager, assigned Discovery Employee.
     [r.requesterId,r.routedToManagerId,r.assigneeId,r.assignedToId].forEach(id=>{const u=id&&this.user(id);if(u&&u.email&&u.status==='active')to.add(u.email);});
-    const req=this.user(r.requesterId),dep=req?deptOf(req):null;
-    active.forEach(u=>{const k=roleKey(u);
-      if(dep&&((dep==='sales'&&k==='sales_manager')||(dep==='kam'&&k==='kam_manager')))cc.add(u.email);   // reporting manager
-      if(this.isPrimary(u))cc.add(u.email);});                                                            // permanent admin
+    // CC: the permanent (owner) admin only.
+    this.db.users.filter(u=>u.status==='active'&&u.email&&this.isPrimary(u)).forEach(u=>cc.add(u.email));
     to.forEach(e=>cc.delete(e));
     return {to:[...to],cc:[...cc]};
   },
