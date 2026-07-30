@@ -752,6 +752,90 @@ body.dark .ptype.barter{background:#3a2410}
   .nav a{transition:transform .15s ease,background .15s ease,color .15s ease}
   .nav a:hover{transform:translateX(3px)}
 }
+
+/* ============================================================
+   PREMIUM REQUEST-DETAIL — scoped to #fs / .reqfs only
+   ============================================================ */
+#fs{background:
+   radial-gradient(1200px 600px at 12% -8%, rgba(88,71,235,.10), transparent 60%),
+   radial-gradient(1000px 620px at 110% 0%, rgba(14,164,114,.08), transparent 55%),
+   var(--surface-2)}
+body.dark #fs{background:
+   radial-gradient(1200px 600px at 12% -8%, rgba(120,100,255,.16), transparent 60%),
+   radial-gradient(1000px 620px at 110% 0%, rgba(14,164,114,.12), transparent 55%),
+   var(--surface-2)}
+#fs .fsbar{padding:13px 26px;box-shadow:0 6px 20px -18px rgba(20,20,50,.5)}
+#fs .fswrap{max-width:min(1560px,95vw)!important;padding:26px 28px 60px}
+@media(max-width:720px){#fs .fswrap{padding:16px 12px 48px}}
+
+/* the main card */
+.reqfs{padding:30px 34px 34px!important;border-radius:22px;border:1px solid var(--line);
+  background:linear-gradient(180deg,var(--surface),var(--surface));
+  box-shadow:0 40px 90px -50px rgba(24,24,60,.55),0 2px 0 rgba(255,255,255,.5) inset;
+  position:relative;overflow:hidden}
+.reqfs::before{content:"";position:absolute;left:0;right:0;top:0;height:4px;
+  background:linear-gradient(90deg,var(--primary),var(--accent,#0ea472))}
+@media(max-width:720px){.reqfs{padding:20px 16px!important;border-radius:16px}}
+
+/* header */
+.reqfs .dt-top{border-bottom:1px dashed var(--line);padding-bottom:18px;margin-bottom:4px}
+.reqfs .dt-title{font-size:30px;letter-spacing:-.03em;line-height:1.1;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.reqfs .dt-title .campchip.big{font-size:12.5px;padding:6px 13px;border-radius:999px;background:var(--primary-soft);color:var(--primary-deep,var(--primary));font-weight:600;border:1px solid rgba(88,71,235,.18)}
+.reqfs .dt-sub{font-size:13.5px;color:var(--muted);margin-top:8px}
+.reqfs .dt-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.reqfs .dt-meta .mono{font-size:12px;font-weight:700;letter-spacing:.04em;opacity:.75}
+.reqfs .badge{border-radius:999px;padding:4px 11px;font-weight:600;box-shadow:0 1px 0 rgba(0,0,0,.03)}
+
+/* pipeline */
+.reqfs .pipeline{margin:18px 0 24px;padding:16px 18px;background:var(--surface-2);border:1px solid var(--line);border-radius:16px}
+
+/* discovery clock strip — hero */
+.reqfs .disc-strip{border-radius:18px;padding:18px 22px;margin:6px 0 18px;
+  background:linear-gradient(135deg,var(--surface),var(--surface-2));border:1px solid var(--line);
+  box-shadow:0 20px 40px -32px rgba(24,24,60,.5)}
+.reqfs .disc-strip.on{background:linear-gradient(135deg,rgba(14,164,114,.10),rgba(88,71,235,.06));border-color:rgba(14,164,114,.4)}
+.reqfs .disc-strip .dsk{font-size:11px;letter-spacing:.08em}
+.reqfs .disc-strip .dsv{font-size:34px;letter-spacing:.5px}
+.reqfs .disc-timer{font-variant-numeric:tabular-nums}
+
+/* spec grid → premium stat tiles that fill the width */
+.reqfs .specgrid{grid-template-columns:repeat(auto-fill,minmax(196px,1fr));gap:12px;background:none;border:none;border-radius:0;overflow:visible;margin:22px 0 8px}
+.reqfs .specgrid .s{background:var(--surface);border:1px solid var(--line);border-radius:15px;padding:15px 16px;position:relative;overflow:hidden;
+  transition:transform .18s cubic-bezier(.3,.7,.3,1),box-shadow .22s,border-color .18s}
+.reqfs .specgrid .s::before{content:"";position:absolute;left:0;top:12px;bottom:12px;width:3px;border-radius:3px;background:linear-gradient(var(--primary),var(--accent,#0ea472));opacity:0;transition:opacity .2s}
+.reqfs .specgrid .s:hover{transform:translateY(-4px);box-shadow:0 18px 34px -20px rgba(24,24,60,.4);border-color:rgba(88,71,235,.35)}
+.reqfs .specgrid .s:hover::before{opacity:1}
+.reqfs .specgrid .s .k{font-size:10.5px;letter-spacing:.07em;color:var(--muted)}
+.reqfs .specgrid .s .v{font-size:15.5px;font-family:var(--disp);font-weight:600;margin-top:5px;line-height:1.25}
+
+/* section headers with accent bar */
+.reqfs .sec-t{position:relative;font-family:var(--disp);font-size:16px;font-weight:600;letter-spacing:-.01em;margin:26px 0 12px;padding-left:14px}
+.reqfs .sec-t::before{content:"";position:absolute;left:0;top:2px;bottom:2px;width:4px;border-radius:4px;background:linear-gradient(var(--primary),var(--accent,#0ea472))}
+
+/* inner cards + notices */
+.reqfs .card{border-radius:16px;border:1px solid var(--line);transition:box-shadow .2s,border-color .18s}
+.reqfs .card:hover{box-shadow:0 16px 34px -24px rgba(24,24,60,.3)}
+.reqfs .notice{border-radius:14px}
+.reqfs .roundws{border-radius:16px}
+
+/* tables — premium */
+.reqfs .revtable,.reqfs .tblwrap{border-radius:14px;border:1px solid var(--line);overflow:hidden}
+.reqfs table.tbl{border-collapse:separate;border-spacing:0}
+.reqfs table.tbl thead th{background:var(--surface-2);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:11px 12px;border-bottom:1px solid var(--line)}
+.reqfs table.tbl tbody td{padding:11px 12px;border-bottom:1px solid var(--line-2)}
+.reqfs table.tbl tbody tr:last-child td{border-bottom:none}
+.reqfs table.tbl tbody tr{transition:background .14s}
+.reqfs table.tbl tbody tr:hover{background:var(--primary-soft)}
+
+/* pick buttons in review */
+.reqfs .pickb{transition:transform .12s,background .16s,color .16s,border-color .16s}
+.reqfs .pickb:hover{transform:translateY(-1px)}
+
+/* Open animation lives on the persistent #fs container, so it plays once when
+   the panel opens and never re-fires on the re-renders that follow each action. */
+#fs{animation:premUp .4s cubic-bezier(.22,.8,.3,1)}
+@keyframes premUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){#fs{animation:none}}
 </style>
 
 
