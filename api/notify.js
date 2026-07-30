@@ -10,6 +10,14 @@ const { google } = require('googleapis');
 function b64url(s) {
   return Buffer.from(s).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
+// Stable thread anchor derived from the (identical-per-campaign) subject, so
+// every email for a campaign carries the same References and mail clients group
+// them into ONE conversation — even weeks apart. Never a new thread.
+function threadRef(subject) {
+  let h = 5381; const s = 'dd:' + String(subject || '');
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return `<dd-${h.toString(36)}@discoverdesk.app>`;
+}
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
@@ -89,10 +97,16 @@ module.exports = async (req, res) => {
         ['https://www.googleapis.com/auth/gmail.send'], GMAIL_SENDER);
       const gmail = google.gmail({ version: 'v1', auth });
       const boundary = 'ddmix_' + Math.random().toString(36).slice(2);
+      const ref = threadRef(subject);
       const headers = [`From: DiscoverDesk <${GMAIL_SENDER}>`, `To: ${(toArr.length ? toArr : ccArr).join(', ')}`];
       if (ccArr.length) headers.push(`Cc: ${ccArr.join(', ')}`);
       headers.push('MIME-Version: 1.0',
         `Content-Type: multipart/alternative; boundary="${boundary}"`,
+        // Unique id per message, but every message references the same campaign
+        // anchor → guaranteed to stay in one thread.
+        `Message-ID: <dd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}@discoverdesk.app>`,
+        `In-Reply-To: ${ref}`,
+        `References: ${ref}`,
         `Subject: ${encSubject(subject)}`);
       const mime = [
         `--${boundary}`,
@@ -118,7 +132,8 @@ module.exports = async (req, res) => {
   const from = process.env.EMAIL_FROM || 'DiscoverDesk <onboarding@resend.dev>';
   if (!key) return res.status(200).json({ ok: false, skipped: 'no email backend configured (set GMAIL_SENDER or RESEND_API_KEY)' });
   try {
-    const payload = { from, to: toArr.length ? toArr : ccArr.slice(0, 1), subject: subject || 'DiscoverDesk', text: text || '', html };
+    const ref = threadRef(subject);
+    const payload = { from, to: toArr.length ? toArr : ccArr.slice(0, 1), subject: subject || 'DiscoverDesk', text: text || '', html, headers: { 'In-Reply-To': ref, 'References': ref } };
     if (ccArr.length) payload.cc = ccArr;
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
