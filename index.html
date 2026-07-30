@@ -190,15 +190,18 @@ table{width:100%;border-collapse:collapse}
    squeezed while the short status columns took more width than they need.
    Fixed layout + an explicit width map, truncation with a title tooltip, and
    a minimum width below which the table scrolls instead of crushing. */
-.tbl.fixed{table-layout:fixed;min-width:940px}
+.tbl.fixed{table-layout:fixed;min-width:900px}
 .tbl.fixed th,.tbl.fixed td{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tbl.fixed .c-id{width:96px}
-.tbl.fixed .c-brand{width:22%}
-.tbl.fixed .c-camp{width:20%}
-.tbl.fixed .c-who{width:14%}
-.tbl.fixed .c-status{width:120px}
-.tbl.fixed .c-when{width:110px}
-.tbl.fixed .c-num{width:88px;text-align:right}
+.tbl.fixed .c-id{width:84px}
+.tbl.fixed .c-brand{width:20%}
+.tbl.fixed .c-camp{width:15%}
+.tbl.fixed .c-who{width:12%}
+.tbl.fixed .c-status{width:96px}
+.tbl.fixed .c-when{width:96px}
+.tbl.fixed .c-num{width:66px;text-align:right}
+.tbl.fixed .c-live{width:150px}
+/* let the live-status badge sit on its own line & not clip */
+.reqtbl .c-live .badge{max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .tblwrap{overflow-x:auto}
 .tbl th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:700;padding:11px 14px;border-bottom:1px solid var(--line);background:var(--surface-2)}
 .tbl td{padding:12px 14px;border-bottom:1px solid var(--line-2);vertical-align:middle;font-size:13px}
@@ -2425,9 +2428,9 @@ const App={
     if(r.status==='approved'||r.discoveryEndedAt||r.closed)return {cat:'approved',label:'Delivered',cls:'b-approved'};
     const sub=this.submittedRound(r),open=this.openRound(r);
     const decided=(r.rounds||[]).filter(rd=>this.roundStatus(rd)==='decided').length;
-    if(sub)return {cat:'under_review',label:`Round ${sub.round} submitted`,cls:'b-review'};
-    if(open&&this.discRunning(r))return {cat:'in_progress',label:`Round ${open.round} in discovery`,cls:'b-progress'};
-    if(r.discoveryStartedAt&&!open&&!sub)return {cat:'in_progress',label:decided?`Between rounds · ${decided} delivered`:'In discovery',cls:'b-progress'};
+    if(sub)return {cat:'under_review',label:`R${sub.round} submitted`,cls:'b-review'};
+    if(open&&this.discRunning(r))return {cat:'in_progress',label:`R${open.round} · discovery`,cls:'b-progress'};
+    if(r.discoveryStartedAt&&!open&&!sub)return {cat:'in_progress',label:'Between rounds',cls:'b-progress'};
     if(!r.assigneeId&&!r.assignedToId&&!r.routedToManagerId)return {cat:'assigned',label:'Unassigned',cls:'b-draft'};
     return {cat:'assigned',label:'Assigned',cls:'b-assigned'};
   },
@@ -2468,8 +2471,8 @@ const App={
         <span class="chip ${f.special==='overdue'?'on':''}" onclick="App.filters.special=App.filters.special==='overdue'?null:'overdue';App.vRequests()">Overdue</span>
         <span style="flex:1"></span><span class="chip ${f.mine?'on':''}" onclick="App.filters.mine=!App.filters.mine;App.vRequests()">Only mine</span></div>
       ${sel.length?`<div class="selbar"><b>${sel.length}</b> selected ${canAssign?`<select class="mini-select" style="color:var(--ink)" onchange="if(this.value)App.bulkAssign(this.value)"><option value="">Assign to…</option>${this.assignTargets().map(u=>`<option value="${u.id}">${esc(u.name)} · ${ROLES[roleKey(u)]}</option>`).join("")}</select>`:''}<select class="mini-select" style="color:var(--ink)" onchange="if(this.value)App.bulkPriority(this.value)"><option value="">Priority…</option><option value="high">High</option><option value="med">Medium</option><option value="low">Low</option></select><button class="btn ghost xs" onclick="App.exportReqsSel()">${svg(IC.down,13)} Export</button>${this.can('admin')?`<button class="btn danger xs" onclick="App.confirmBulkDelete('requests')">${svg(IC.x,13)} Delete</button>`:''}<span style="flex:1"></span><button class="btn ghost xs" onclick="App._rsel={};App.vRequests()">Clear</button></div>`:''}
-      <div class="card">${R.length?`<div class="tblwrap"><table class="tbl fixed"><thead><tr><th style="width:34px"></th><th class="c-id">ID</th><th class="c-brand">Brand / niche</th><th class="c-camp">Campaign</th><th class="c-status">Priority</th><th class="c-status">Flags</th><th class="c-who">Owner</th><th class="c-who">Assigned by Sales/KAM</th><th class="c-who">Assigned by Discovery Manager</th><th class="c-num">Rounds</th><th class="c-when">Deadline</th><th class="c-status">Status</th></tr></thead><tbody>
-        ${R.map(r=>`<tr class="click" onclick="App.openReq('${r.id}')"><td onclick="event.stopPropagation()"><span class="chk ${this._rsel[r.id]?'on':''}" onclick="App.rsel('${r.id}')">${svg(IC.check,12)}</span></td><td class="id">${r.id}</td><td><div class="strong">${esc(r.brandName)}</div><div class="cellsub">${esc(r.niche)} · Sample round ${r.sampleRound||r.round||1}</div></td><td>${this.campChip(r.campaignId,r.campaignName)}</td><td>${this.priBadge(r.priority)}</td><td>${this.flagBadge(r)||'<span class="cellsub">—</span>'}</td><td title="${esc((this.user(r.requesterId)||{}).name||'')}">${this.whoCell(r.requesterId)}</td><td>${r.routedById?this.whoCell(r.routedToManagerId):'<span class="cellsub">—</span>'}</td><td>${(r.assigneeId||r.assignedToId)?this.whoCell(r.assignedToId||r.assigneeId):`<span class="cellsub">${this.hopLabel(r)}</span>`}</td><td><span class="mono" style="font-weight:600">${r.rounds.length}</span>${r.rounds.some(x=>x.decision==='rejected')?' <span class="cellsub">('+r.rounds.filter(x=>x.decision==='rejected').length+'r)</span>':''}</td><td>${this.deadlineCell(r)}</td><td>${(()=>{const s=this.reqLiveStatus(r);return `<span class="badge ${s.cls}" style="white-space:nowrap"><span class="d"></span>${s.label}</span>`;})()}</td></tr>`).join('')}
+      <div class="card">${R.length?`<div class="tblwrap"><table class="tbl fixed reqtbl"><thead><tr><th style="width:34px"></th><th class="c-id">ID</th><th class="c-brand">Brand / niche</th><th class="c-camp">Campaign</th><th class="c-status">Priority</th><th class="c-who">Owner</th><th class="c-who">Assigned to</th><th class="c-num">Rounds</th><th class="c-when">Deadline</th><th class="c-live">Status</th></tr></thead><tbody>
+        ${R.map(r=>`<tr class="click" onclick="App.openReq('${r.id}')"><td onclick="event.stopPropagation()"><span class="chk ${this._rsel[r.id]?'on':''}" onclick="App.rsel('${r.id}')">${svg(IC.check,12)}</span></td><td class="id">${r.id}</td><td><div class="strong">${esc(r.brandName)}</div><div class="cellsub">${esc(r.niche)} · Sample round ${r.sampleRound||r.round||1}</div></td><td>${this.campChip(r.campaignId,r.campaignName)}</td><td>${this.priBadge(r.priority)}${this.flags(r).length?`<div style="margin-top:4px">${this.flagBadge(r)}</div>`:''}</td><td title="${esc((this.user(r.requesterId)||{}).name||'')}">${this.whoCell(r.requesterId)}</td><td>${(r.assigneeId||r.assignedToId)?this.whoCell(r.assignedToId||r.assigneeId):(r.routedToManagerId?this.whoCell(r.routedToManagerId):`<span class="cellsub">${this.hopLabel(r)}</span>`)}</td><td><span class="mono" style="font-weight:600">${r.rounds.length}</span>${r.rounds.some(x=>x.decision==='rejected')?' <span class="cellsub">('+r.rounds.filter(x=>x.decision==='rejected').length+'r)</span>':''}</td><td>${this.deadlineCell(r)}</td><td>${(()=>{const s=this.reqLiveStatus(r);return `<span class="badge ${s.cls}" style="white-space:nowrap"><span class="d"></span>${s.label}</span>`;})()}</td></tr>`).join('')}
         </tbody></table></div>`:this.emptyBox('No requests here','Try a different filter or raise a new request.',this.can('raise')?`<button class="btn primary" onclick="App.openNewReq()">${svg(IC.plus,16)} New request</button>`:'')}</div>`);
   },
   rsel(id){this._rsel[id]=!this._rsel[id];this.vRequests();},
