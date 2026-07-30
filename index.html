@@ -1706,8 +1706,7 @@ const App={
      pings everyone responsible exactly once per distinct flag state. The
      per-request `flagNotifiedSig` marker (persisted) dedupes across sessions. */
   async sweepFlags(){
-    if(!this.me||!Array.isArray(this.db.reqs))return;
-    if(!(this.can('admin')||isMgr(this.me)))return;   // only oversight roles run the sweep
+    if(!this.me||!Array.isArray(this.db.reqs))return;   // in-app bell alerts for everyone; the EMAILS are sent by the /api/flag-sweep cron
     let changed=false;
     for(const r of this.db.reqs){
       if(r.deletedAt)continue;
@@ -1723,7 +1722,6 @@ const App={
           for(const pid of people){
             await this.notify(pid,`⚠ ${r.id} flagged`,`${r.brandName} · ${campNm} — ${f.join(', ')}.`,'reject',null);
           }
-          this.sendMailChain(r,'flagged');   // the email goes on the request's chain (the 4 people)
         }
       }else if(r.flagNotifiedSig){r.flagNotifiedSig=null;changed=true;}
     }
@@ -5436,24 +5434,25 @@ Object.assign(App,{
 
   async endDiscovery(id){
     const r=this.req(id);if(!r)return;
-    if(!this.canClock(r))return this.toast('Only '+this.clockOwnerName(r)+' — the Sales/KAM who raised this — can end discovery.','err');
-    if(!this.discRunning(r))return this.toast('Discovery is not running','err');
+    if(!this.canClock(r))return this.toast('Only '+this.clockOwnerName(r)+' — the Sales/KAM who raised this — can end the campaign.','err');
+    if(!this.discRunning(r))return this.toast('The campaign is not running','err');
     r.discoveryEndedBy=this.me.id;
     const sub=this.submittedRound(r);
-    if(sub)return this.toast(`Round ${sub.round} is waiting on your decision. Select / reject the creators first, then end discovery.`,'err');
+    if(sub)return this.toast(`Round ${sub.round} is waiting on your decision. Select / reject the creators first, then end the campaign.`,'err');
     const op=this.openRound(r);
-    if(op&&(op.rows||[]).length&&!confirm(`Round ${op.round} is still open with ${op.rows.length} creator(s) not submitted. End discovery anyway?`))return;
+    if(op&&(op.rows||[]).length&&!confirm(`Round ${op.round} is still open with ${op.rows.length} creator(s) not submitted. End the campaign anyway?`))return;
     if(op){op.status='decided';op.decision=op.decision||'closed';op.reason=op.reason||'Closed by requester';}
     this.clockStop(r);r.discoveryEndedAt=now();r.closed=true;r.status='approved';
     const mins=Math.round((r.discoveryEndedAt-r.discoveryStartedAt)/60000);
-    this.pushEvent(r,`Discovery ended by ${this.me.name} — ${fmtDur(mins/60)} total, ${r.rounds.length} round(s)`,'approve');
+    this.pushEvent(r,`Campaign ended by ${this.me.name} — ${fmtDur(mins/60)} total, ${r.rounds.length} round(s)`,'approve');
     this.audit('req.discovery.end','req:'+r.id,{name:r.brandName,campaign:this.campName(r.campaignId),field:mins+' min'});
-    // NOTE: the campaign enquiry is NOT auto-closed here. Sales ends it manually
-    // when the campaign moves to execution (see endCampaignEnquiry).
+    // One action: ending the campaign also closes its enquiry → moves to execution.
+    const enq=this.campaignEnquiry(r);
+    if(enq&&!['won','lost'].includes(enq.status)){enq.status='won';enq.closedAt=now();enq.closedBy=this.me.id;await this.save('enq');}
     await this.save('reqs');this.syncActsLocal();await this.save('acts');
-    if(r.assigneeId&&r.assigneeId!==this.me.id)await this.notify(r.assigneeId,'Discovery closed ✅',`${r.id} · ${r.brandName} — closed after ${r.rounds.length} round(s).`,'approve',{pref:'decision',subject:`[DiscoverDesk] Closed: ${r.id}`,body:`${this.me.name} closed discovery on ${r.id}.`});
+    if(r.assigneeId&&r.assigneeId!==this.me.id)await this.notify(r.assigneeId,'Campaign closed ✅',`${r.id} · ${r.brandName} — closed after ${r.rounds.length} round(s), moved to execution.`,'approve',{pref:'decision',subject:`[DiscoverDesk] Campaign closed: ${r.id}`,body:`${this.me.name} closed the campaign for ${r.id}. Moved to execution.`});
     this.sendMailChain(r,'delivered');
-    this.toast('Discovery closed ✅ — end the campaign enquiry when it moves to execution.','ok');this.confetti();this.renderNav();this.openReq(id);
+    this.toast('Campaign closed ✅ — moved to execution 🎯','ok');this.confetti();this.renderNav();this.openReq(id);
   },
   /* The campaign enquiry is auto-created/linked when the first round opens, and
      stays OPEN through discovery. Sales closes it when the campaign goes to
@@ -5969,11 +5968,11 @@ Object.assign(App,{
       </div>
       <div class="dsr">
         ${!r.campaignId?(this.isRequester(r)?`<button class="btn sm" onclick="App.setCampaign('${r.id}')">${svg(IC.plus,15)} Set campaign first</button>`:`<span class="cellsub">No campaign set on this request yet</span>`):''}
-        ${r.campaignId&&!r.discoveryStartedAt?(!r.assigneeId?`<span class="cellsub">Assign this request to start the clock.</span>`:this.canClock(r)?`<button class="btn primary sm" onclick="App.startDiscovery('${r.id}')">${svg(IC.bolt,15)} Start discovery</button>`:`<span class="cellsub">Waiting on <b>${esc(this.clockOwnerName(r))}</b> to start discovery</span>`):''}
+        ${r.campaignId&&!r.discoveryStartedAt?(!r.assigneeId?`<span class="cellsub">Assign this request to start the campaign.</span>`:this.canClock(r)?`<button class="btn primary sm" onclick="App.startDiscovery('${r.id}')">${svg(IC.bolt,15)} Start campaign</button>`:`<span class="cellsub">Waiting on <b>${esc(this.clockOwnerName(r))}</b> to start the campaign</span>`):''}
         ${running&&this.isRequester(r)&&!openRd&&!this.submittedRound(r)?`<button class="btn primary sm" onclick="App.openNextRound('${r.id}')">${svg(IC.plus,15)} Request another round</button>`:''}
-        ${running?(this.canClock(r)?`<button class="btn danger sm" onclick="App.endDiscovery('${r.id}')">${svg(IC.check,15)} End discovery</button>`:`<span class="cellsub">Only <b>${esc(this.clockOwnerName(r))}</b> can end this</span>`):''}
-        ${r.discoveryEndedAt?`<span class="badge b-approved"><span class="d"></span>Closed after ${r.rounds.length} round${r.rounds.length!==1?'s':''}</span>`:''}
-        ${(()=>{const e=this.campaignEnquiry(r);if(!e)return '';const done=['won','lost'].includes(e.status);if(done)return `<span class="badge b-confirmed"><span class="d"></span>Campaign enquiry ended</span>`;if(r.discoveryEndedAt&&(this.isRequester(r)||this.can('admin')))return `<button class="btn success sm" title="All rounds done — move the campaign to execution and close its enquiry" onclick="App.endCampaignEnquiry('${r.id}')">${svg(IC.check,15)} End campaign enquiry</button>`;return `<span class="badge b-review"><span class="d"></span>Campaign enquiry open</span>`;})()}
+        ${running?`<span class="badge b-progress" title="The campaign is live — auto-started with discovery"><span class="d"></span>Campaign live</span>`:''}
+        ${running?(this.canClock(r)?`<button class="btn danger sm" title="All rounds done — close the campaign and move to execution (only ${esc(this.clockOwnerName(r))})" onclick="App.endDiscovery('${r.id}')">${svg(IC.check,15)} End campaign</button>`:`<span class="cellsub">Only <b>${esc(this.clockOwnerName(r))}</b> can end the campaign</span>`):''}
+        ${r.discoveryEndedAt?`<span class="badge b-approved"><span class="d"></span>Campaign closed · ${r.rounds.length} round${r.rounds.length!==1?'s':''} · execution</span>`:''}
         ${((r.suggestedCreators&&r.suggestedCreators.length)||(r.rounds||[]).some(rd=>(rd.rows||[]).length))?`<button class="btn ghost sm" onclick="App.downloadReqCreators('${r.id}')">${svg(IC.down,15)} Download creators</button>`:''}
       </div></div>`;
 
