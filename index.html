@@ -2360,7 +2360,7 @@ const App={
         </tbody></table></div>`:this.emptyBox('No requests here','Try a different filter or raise a new request.',this.can('raise')?`<button class="btn primary" onclick="App.openNewReq()">${svg(IC.plus,16)} New request</button>`:'')}</div>`);
   },
   rsel(id){this._rsel[id]=!this._rsel[id];this.vRequests();},
-  async bulkAssign(who){const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');const ids=Object.keys(this._rsel).filter(k=>this._rsel[k]);ids.forEach(id=>{const r=this.req(id);if(r&&r.status!=='draft'){this.recordHop(r,who);this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');}});await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast(ids.length+' assigned','ok');this._rsel={};this.renderNav();this.vRequests();},
+  async bulkAssign(who){const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');const ids=Object.keys(this._rsel).filter(k=>this._rsel[k]);ids.forEach(id=>{const r=this.req(id);if(r&&r.status!=='draft'){this.recordHop(r,who);this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');}});await this.save('reqs');if(this._enqDirty){this._enqDirty=false;await this.save('enq');}this.syncActsLocal();await this.save('acts');this.toast(ids.length+' assigned','ok');this._rsel={};this.renderNav();this.vRequests();},
   async bulkPriority(p){const ids=Object.keys(this._rsel).filter(k=>this._rsel[k]);ids.forEach(id=>{const r=this.req(id);if(r)r.priority=p;});await this.save('reqs');this.toast(ids.length+' updated','ok');this._rsel={};this.renderNav();this.vRequests();},
   exportReqsSel(){const ids=Object.keys(this._rsel).filter(k=>this._rsel[k]);this.export(this.db.reqs.filter(r=>ids.includes(r.id)).map(r=>({ID:r.id,Brand:r.brandName,Niche:r.niche,Priority:r.priority,Flags:this.flags(r).join('; '),Status:r.status,Discovery:this.user(r.assigneeId)?.name||'',Rounds:r.rounds.length})),'requests_selected.xlsx');},
   exportReqs(){this.export(this.myReqs().filter(r=>r.status!=='draft').map(r=>({ID:r.id,Brand:r.brandName,Niche:r.niche,Type:r.reqType,Round:r.round,Requester:this.user(r.requesterId)?.name,Discovery:this.user(r.assigneeId)?.name||'',FollowersMin:r.fMin,FollowersMax:r.fMax,Platform:r.platform,Qty:r.qty,Rounds:r.rounds.length,Rejections:r.rounds.filter(x=>x.decision==='rejected').length,Status:r.status,Deadline:r.deadline?fmtDate(r.deadline):'',TurnaroundH:durH(r.assignedAt,r.submittedAt)})),'requests.xlsx');},
@@ -2666,7 +2666,7 @@ const App={
     if(k==='discovery_manager')return 'As a Discovery Manager you route this to a Discovery Employee — or assign it to yourself.';
     return 'Pick who delivers this brief.';
   },
-  async assignReq(id){const r=this.req(id);const who=document.getElementById('assignSel').value;const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');this.recordHop(r,who);this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');await this.notify(who,'Request assigned to you',`${r.id} · ${r.brandName}${r.discoveryStartedAt?' — discovery clock started':''}`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned ${r.id}`,body:`You've been assigned ${r.id} (${r.brandName}).${r.discoveryStartedAt?' The discovery clock has started — add creators and submit each round.':''}`});await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast(r.discoveryStartedAt?'Assigned — discovery clock started ⏱':'Assigned','ok');this.renderNav();this.openReq(id);},
+  async assignReq(id){const r=this.req(id);const who=document.getElementById('assignSel').value;const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');this.recordHop(r,who);if(this._enqDirty){this._enqDirty=false;await this.save('enq');}this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');await this.notify(who,'Request assigned to you',`${r.id} · ${r.brandName}${r.discoveryStartedAt?' — discovery clock started':''}`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned ${r.id}`,body:`You've been assigned ${r.id} (${r.brandName}).${r.discoveryStartedAt?' The discovery clock has started — add creators and submit each round.':''}`});await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast(r.discoveryStartedAt?'Assigned — discovery clock started ⏱':'Assigned','ok');this.renderNav();this.openReq(id);},
   async publishDraft(id){const r=this.req(id);r.status='assigned';this.pushEvent(r,'Request published','create');await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Published','ok');this.renderNav();this.openReq(id);},
   async startWork(id){const r=this.req(id);r.status='in_progress';r.startedAt=now();this.pushEvent(r,'Started discovery','info');await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Marked in discovery','ok');this.openReq(id);},
   wireDrop(id){const dz=document.getElementById('dropZone');if(!dz)return;['dragover','dragenter'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.add('drag');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.remove('drag');}));dz.addEventListener('drop',ev=>{const f=ev.dataTransfer.files[0];if(f)this.parseSheet(f,id);});},
@@ -5288,6 +5288,7 @@ Object.assign(App,{
     r.startedAt=r.startedAt||now();
     this.clockStart(r);
     if(!this.openRound(r)&&!this.submittedRound(r)){const rd=this.newRound(r,'Discovery clock auto-started on assignment');rd.openedAtAccum=this.clockElapsedMs(r);rd.deadlineAt=r.deadline||null;}
+    this.ensureCampaignEnquiry(r);
     this.pushEvent(r,'Discovery clock auto-started on assignment to Discovery','info');
     return true;
   },
@@ -5303,9 +5304,10 @@ Object.assign(App,{
     this.clockStart(r);
     const pending=this.submittedRound(r);
     if(!this.openRound(r)&&!pending){const rd=this.newRound(r,'Discovery started');rd.openedAtAccum=this.clockElapsedMs(r);rd.deadlineAt=r.deadline||null;}
+    this.ensureCampaignEnquiry(r);
     this.pushEvent(r,'Discovery started by '+this.me.name+' — round '+(this.openRound(r)||{round:1}).round+' open','info');
     this.audit('req.discovery.start','req:'+r.id,{name:r.brandName,campaign:this.campName(r.campaignId)});
-    await this.save('reqs');this.syncActsLocal();await this.save('acts');
+    await this.save('reqs');if(this._enqDirty){this._enqDirty=false;await this.save('enq');}this.syncActsLocal();await this.save('acts');
     if(r.assigneeId&&r.assigneeId!==this.me.id)await this.notify(r.assigneeId,'Discovery started ⏱',`${r.id} · ${r.brandName} — ${this.campName(r.campaignId)}. The clock is running, round ${(this.openRound(r)||{}).round} is open.`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Discovery started: ${r.id}`,body:`${this.me.name} started discovery on ${r.id} (${r.brandName} · ${this.campName(r.campaignId)}). Round ${(this.openRound(r)||{}).round} is open — add creators and submit the round when ready.`});
     this.toast('Discovery started — timer running ⏱','ok');this.renderNav();this.openReq(id);
   },
@@ -5324,12 +5326,37 @@ Object.assign(App,{
     const mins=Math.round((r.discoveryEndedAt-r.discoveryStartedAt)/60000);
     this.pushEvent(r,`Discovery ended by ${this.me.name} — ${fmtDur(mins/60)} total, ${r.rounds.length} round(s)`,'approve');
     this.audit('req.discovery.end','req:'+r.id,{name:r.brandName,campaign:this.campName(r.campaignId),field:mins+' min'});
-    // All rounds complete → close the originating enquiry (won).
-    const enq=(this.db.enq||[]).find(e=>e.convertedRequestId===r.id&&!['won','lost'].includes(e.status));
-    if(enq){enq.status='won';enq.closedAt=now();await this.save('enq');}
+    // NOTE: the campaign enquiry is NOT auto-closed here. Sales ends it manually
+    // when the campaign moves to execution (see endCampaignEnquiry).
     await this.save('reqs');this.syncActsLocal();await this.save('acts');
     if(r.assigneeId&&r.assigneeId!==this.me.id)await this.notify(r.assigneeId,'Discovery closed ✅',`${r.id} · ${r.brandName} — closed after ${r.rounds.length} round(s).`,'approve',{pref:'decision',subject:`[DiscoverDesk] Closed: ${r.id}`,body:`${this.me.name} closed discovery on ${r.id}.`});
-    this.toast('Discovery closed ✅','ok');this.confetti();this.renderNav();this.openReq(id);
+    this.toast('Discovery closed ✅ — end the campaign enquiry when it moves to execution.','ok');this.confetti();this.renderNav();this.openReq(id);
+  },
+  /* The campaign enquiry is auto-created/linked when the first round opens, and
+     stays OPEN through discovery. Sales closes it when the campaign goes to
+     execution (all rounds done). */
+  ensureCampaignEnquiry(r){
+    if(!r||!this.db.enq)return null;
+    let e=this.db.enq.find(x=>!x.deletedAt&&(x.id===r.enqId||x.convertedRequestId===r.id||(r.campaignId&&x.campaignId===r.campaignId)));
+    if(e){r.enqId=e.id;e.convertedRequestId=e.convertedRequestId||r.id;if(!e.campaignId)e.campaignId=r.campaignId;this._enqDirty=true;return e;}
+    e={id:uid(),client:r.brandName||'',campaign:this.campName(r.campaignId)||r.campaignName||'',contact:'',service:r.niche||'Influencer campaign',budget:'',source:'Campaign',status:'proposal',notes:'Auto-created when discovery started',ownerId:r.requesterId,createdAt:now(),brandId:r.brandId||null,campaignId:r.campaignId||null,convertedRequestId:r.id,website:r.brandWebsite||''};
+    this.db.enq.push(e);r.enqId=e.id;this._enqDirty=true;
+    this.pushEvent(r,'Campaign enquiry opened','create');
+    return e;
+  },
+  campaignEnquiry(r){return r&&this.db.enq?this.db.enq.find(x=>!x.deletedAt&&(x.id===r.enqId||x.convertedRequestId===r.id)):null;},
+  async endCampaignEnquiry(id){
+    const r=this.req(id);if(!r)return;
+    if(!this.isRequester(r)&&!this.can('admin'))return this.toast('Only the Sales/KAM who raised this can end the campaign enquiry.','err');
+    if(!r.discoveryEndedAt)return this.toast('End discovery first — then close the campaign enquiry when it moves to execution.','err');
+    const e=this.campaignEnquiry(r);
+    if(!e)return this.toast('No campaign enquiry linked to this request.','err');
+    if(['won','lost'].includes(e.status))return this.toast('This campaign enquiry is already closed.','ok');
+    e.status='won';e.closedAt=now();e.closedBy=this.me.id;
+    this.pushEvent(r,`Campaign enquiry ended by ${this.me.name} — moved to execution`,'approve');
+    this.audit('enq.end','enq:'+e.id,{name:e.client,campaign:e.campaign});
+    await this.save('enq');await this.save('reqs');this.syncActsLocal();await this.save('acts');
+    this.toast('Campaign enquiry closed — moved to execution 🎯','ok');this.renderNav();this.openReq(id);
   },
 
   // Requester opens a fresh round on demand (e.g. after a deliver) — the request keeps going until "End discovery".
@@ -5502,6 +5529,8 @@ Object.assign(App,{
     if(!(rd.rows||[]).length)return this.toast('Round is empty — add creators before submitting.','err');
     this.clockStop(r);                                            // timer stops on submit
     rd.spentMs=Math.max(0,this.clockElapsedMs(r)-(rd.openedAtAccum||0));
+    rd.deadlineAt=rd.deadlineAt||r.deadline||null;                // freeze this round's deadline for the report
+    r.deadline=null;                                              // deadline resets — a new one is chosen for the next round
     rd.status='submitted';rd.submittedAt=now();rd.submittedBy=this.me.id;rd.total=rd.rows.length;
     r.status='under_review';r.submittedAt=now();
     this.pushEvent(r,`Round ${rd.round} delivered — ${rd.total} profiles · ${this.fmtHMS(rd.spentMs)} working time`,'submit');
@@ -5770,8 +5799,8 @@ Object.assign(App,{
     if(!draft&&assignee){this.pushEvent(r,'Assigned to '+this.user(assignee).name,'assign');await this.notify(assignee,'New discovery request assigned',`${r.id} · ${brandName} — ${campName} — ${niche}. Due ${r.deadline?fmtDate(r.deadline):'soon'}.`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned: ${r.id} ${brandName}`,body:`You've been assigned ${r.id} (${brandName} · ${campName} — ${niche}).\nProfiles needed: ${r.qty}. Deadline: ${r.deadline?fmtDate(r.deadline):'TBD'}.\n\n${r.discoveryStartedAt?'The discovery clock has already started — add creators and submit each round.':'The requester will start discovery — the clock begins then.'}\n\n— ${this.me.name}`});}
     this.db.reqs.push(r);
     const c=this.camp(campId);if(c){c.reqIds=c.reqIds||[];if(!c.reqIds.includes(r.id))c.reqIds.push(r.id);await this.save('camps');}
-    if(this._enqId){const e=this.db.enq.find(x=>x.id===this._enqId);if(e){e.brandId=brandId;e.campaignId=campId;e.convertedRequestId=r.id;e.status=['won','lost'].includes(e.status)?e.status:'proposal';await this.save('enq');}}
-    await this.save('reqs');this.syncActsLocal();await this.save('acts');
+    if(this._enqId){const e=this.db.enq.find(x=>x.id===this._enqId);if(e){e.brandId=brandId;e.campaignId=campId;e.convertedRequestId=r.id;e.status=['won','lost'].includes(e.status)?e.status:'proposal';r.enqId=e.id;this._enqDirty=false;await this.save('enq');}}
+    await this.save('reqs');if(this._enqDirty){this._enqDirty=false;await this.save('enq');}this.syncActsLocal();await this.save('acts');
     this.closeAll();this.toast(draft?'Saved as draft':`Request raised for ${campName} 🎯`,'ok');this.renderNav();this.go('requests');
     if(!draft)this.fireWebhook('request.raised',{id:r.id,brand:brandName,campaign:campName,niche,type,round:r.round,requester:this.me.name});
     if(!draft)this.sendMailChain(r,'raised');
@@ -5802,6 +5831,7 @@ Object.assign(App,{
         ${running&&this.isRequester(r)&&!openRd&&!this.submittedRound(r)?`<button class="btn primary sm" onclick="App.openNextRound('${r.id}')">${svg(IC.plus,15)} Request another round</button>`:''}
         ${running?(this.canClock(r)?`<button class="btn danger sm" onclick="App.endDiscovery('${r.id}')">${svg(IC.check,15)} End discovery</button>`:`<span class="cellsub">Only <b>${esc(this.clockOwnerName(r))}</b> can end this</span>`):''}
         ${r.discoveryEndedAt?`<span class="badge b-approved"><span class="d"></span>Closed after ${r.rounds.length} round${r.rounds.length!==1?'s':''}</span>`:''}
+        ${(()=>{const e=this.campaignEnquiry(r);if(!e)return '';const done=['won','lost'].includes(e.status);if(done)return `<span class="badge b-confirmed"><span class="d"></span>Campaign enquiry ended</span>`;if(r.discoveryEndedAt&&(this.isRequester(r)||this.can('admin')))return `<button class="btn success sm" title="All rounds done — move the campaign to execution and close its enquiry" onclick="App.endCampaignEnquiry('${r.id}')">${svg(IC.check,15)} End campaign enquiry</button>`;return `<span class="badge b-review"><span class="d"></span>Campaign enquiry open</span>`;})()}
         ${((r.suggestedCreators&&r.suggestedCreators.length)||(r.rounds||[]).some(rd=>(rd.rows||[]).length))?`<button class="btn ghost sm" onclick="App.downloadReqCreators('${r.id}')">${svg(IC.down,15)} Download creators</button>`:''}
       </div></div>`;
 
