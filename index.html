@@ -2609,7 +2609,7 @@ const App={
   },
   reviewRow(id,i,row,ri,cols){
     const rd=this.req(id).rounds[i];const d=(rd.decisions||{})[ri]||{};const st=d.status||'';
-    const handle=this.cnorm(this.cget(row,['handle','username','instagram','profile url','profile link'])||this.cget(row,['name'])||'');
+    const handle=this.cnorm(this.cget(row,['handle','username','instagram','insta','ig','profile url','profile link','profile','link','url','account','channel'])||this.cget(row,['name'])||'');
     const nm=this.cgetTxt(row,['name','full name','creator'],60)||('@'+handle);
     const fol=this.cgetNum(row,['followers','follower','follow','audience size','subs']);
     let eng=this.cgetPct(row,['engagement rate','engagement','eng rate','er']);
@@ -2687,7 +2687,7 @@ const App={
     rd.rows.forEach((row,ri)=>{
       const st=(dec[ri]||{}).status;
       if(st==='rejected')return;                       // dropped
-      const handle=this.cnorm(this.cget(row,['handle','username','instagram','profile url','profile link'])||this.cget(row,['name'])||'');
+      const handle=this.cnorm(this.cget(row,['handle','username','instagram','insta','ig','profile url','profile link','profile','link','url','account','channel'])||this.cget(row,['name'])||'');
       if(!handle)return;
       const name=this.cgetTxt(row,['name','full name','creator'],60)||handle;
       const followers=this.cgetNum(row,['followers','follower','follow','audience size','subs']);
@@ -2875,7 +2875,7 @@ const App={
   async bulkEnrich(bid){const ids=Object.keys(this._infSel).filter(k=>this._infSel[k]);for(const id of ids){await this.enrichInfl(id);}this.toast('Enriched '+ids.length+' from Meta','ok');},
 
   /* ================= INFLUENCER 360 (creator database) ================= */
-  cnorm(h){h=(''+(h||'')).trim().toLowerCase();if(!h)return '';h=h.replace(/^https?:\/\/(www\.)?(instagram\.com|instagr\.am|tiktok\.com|youtube\.com|twitter\.com|x\.com)\//,'');h=h.replace(/[/?#].*$/,'');h=h.replace(/^@/,'');return h;},
+  cnorm(h){h=(''+(h||'')).trim().toLowerCase();if(!h)return '';h=h.replace(/^https?:\/\//,'');h=h.replace(/^(www\.)?(instagram\.com|instagr\.am|tiktok\.com|youtube\.com|youtu\.be|twitter\.com|x\.com|facebook\.com|fb\.com)\//,'');h=h.replace(/^@/,'');h=h.replace(/[/?#].*$/,'');h=h.replace(/^@/,'');return h;},
   cnum(v){if(v==null)return 0;let s=(''+v).replace(/,/g,'').trim();const m=s.match(/([\d.]+)\s*([kmb]?)/i);if(!m)return 0;let n=parseFloat(m[1])||0;const u=(m[2]||'').toLowerCase();if(u==='k')n*=1e3;else if(u==='m')n*=1e6;else if(u==='b')n*=1e9;return Math.round(n);},
   /* C11 — brands are unique on a trimmed, case-folded name. Mirrors the
      unique index in supabase-brands-migration.sql. Returns the existing
@@ -4218,7 +4218,7 @@ const App={
 
   exportOneCreator(id){const r=(this.db.roster||[]).find(x=>x.id===id);if(!r)return;const sc=this.scores(r);this.export([{Handle:'@'+r.handle,Platform:r.platform,Followers:r.followers,Engagement:r.eng,AvgViews:r.avgViews,Quality:sc.quality,Viral:sc.viral,Authentic:sc.authentic,Fake:sc.fake,Category:r.category,City:r.city,Country:r.country,Email:r.email,Phone:r.phone,BrandCost:r.brandCost}],(r.handle||'creator')+'.xlsx');},
   REQ_COLS(){return [
-    {k:'handle',label:'handle',must:true,alts:['handle','username','instagram','profile url','profile link'],hint:'creator handle or profile URL'},
+    {k:'handle',label:'handle',must:true,alts:['handle','username','instagram','insta','ig','profile url','profile link','profile','link','url','account','channel','social','creator link'],hint:'handle, profile link/URL'},
     {k:'followers',label:'followers',must:false,alts:['followers','follower','audience size'],hint:'number only, e.g. 120000 or 120K'},
     {k:'engagement',label:'engagement',must:false,alts:['engagement','engagement rate','er'],hint:'percent, e.g. 4.2%'},
   ];},
@@ -5688,7 +5688,7 @@ Object.assign(App,{
       rd.rows=rd.rows||[];
       let add=0,dup=0;
       rows.forEach(row=>{
-        const h=this.cnorm(this.cget(row,['handle','username','instagram','profile url','profile link'])||this.cget(row,['name'])||'');
+        const h=this.cnorm(this.cget(row,['handle','username','instagram','insta','ig','profile url','profile link','profile','link','url','account','channel'])||this.cget(row,['name'])||'');
         if(!h)return;
         if(rd.rows.some(x=>this.cnorm(x.handle||'')===h)){dup++;return;}
         const known=this.resolveCreator(h);
