@@ -754,88 +754,80 @@ body.dark .ptype.barter{background:#3a2410}
 }
 
 /* ============================================================
-   PREMIUM REQUEST-DETAIL — scoped to #fs / .reqfs only
+   REQUEST DETAIL — clean, calm, editorial (scoped to #fs / .reqfs)
    ============================================================ */
-#fs{background:
-   radial-gradient(1200px 600px at 12% -8%, rgba(88,71,235,.10), transparent 60%),
-   radial-gradient(1000px 620px at 110% 0%, rgba(14,164,114,.08), transparent 55%),
-   var(--surface-2)}
-body.dark #fs{background:
-   radial-gradient(1200px 600px at 12% -8%, rgba(120,100,255,.16), transparent 60%),
-   radial-gradient(1000px 620px at 110% 0%, rgba(14,164,114,.12), transparent 55%),
-   var(--surface-2)}
-#fs .fsbar{padding:14px 30px!important;box-shadow:0 6px 20px -18px rgba(20,20,50,.5)}
-#fs .fswrap{max-width:min(1760px,96vw)!important;margin:0 auto!important;padding:26px 30px 64px!important}
-@media(max-width:720px){#fs .fswrap{padding:16px 12px 48px!important}}
+#fs{background:var(--surface-2)}
+#fs .fsbar{padding:14px 26px!important}
+#fs .fswrap{max-width:1160px!important;margin:0 auto!important;padding:32px 26px 80px!important}
+@media(max-width:720px){#fs .fswrap{padding:16px 14px 56px!important}}
 
-/* the main card */
-.reqfs{padding:32px 38px 36px!important;border-radius:24px!important;border:1px solid var(--line)!important;
-  background:linear-gradient(180deg,var(--surface),var(--surface))!important;
-  box-shadow:0 44px 100px -54px rgba(24,24,60,.6),0 2px 0 rgba(255,255,255,.5) inset!important;
-  position:relative!important;overflow:hidden!important}
-.reqfs::before{content:"";position:absolute;left:0;right:0;top:0;height:5px;
-  background:linear-gradient(90deg,var(--primary),var(--accent,#0ea472))!important}
-@media(max-width:720px){.reqfs{padding:20px 16px!important;border-radius:16px!important}}
+/* the sheet — quiet surface, one soft shadow, generous padding */
+.reqfs{padding:38px 44px 44px!important;border-radius:20px!important;border:1px solid var(--line)!important;
+  background:var(--surface)!important;
+  box-shadow:0 1px 2px rgba(20,20,50,.04),0 30px 64px -44px rgba(20,20,50,.26)!important;
+  position:relative!important;overflow:visible!important}
+@media(max-width:720px){.reqfs{padding:24px 18px!important;border-radius:16px!important}}
 
-/* header */
-.reqfs .dt-top{border-bottom:1px dashed var(--line);padding-bottom:18px;margin-bottom:4px}
-.reqfs .dt-title{font-size:31px!important;letter-spacing:-.03em;line-height:1.1;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.reqfs .dt-title .campchip.big{font-size:12.5px;padding:6px 13px;border-radius:999px;background:var(--primary-soft);color:var(--primary-deep,var(--primary));font-weight:600;border:1px solid rgba(88,71,235,.18)}
-.reqfs .dt-sub{font-size:13.5px;color:var(--muted);margin-top:8px}
-.reqfs .dt-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.reqfs .dt-meta .mono{font-size:12px;font-weight:700;letter-spacing:.04em;opacity:.75}
-.reqfs .badge{border-radius:999px;padding:4px 11px;font-weight:600;box-shadow:0 1px 0 rgba(0,0,0,.03)}
+/* header — editorial, roomy */
+.reqfs .dt-top{border-bottom:1px solid var(--line-2)!important;padding:0 0 24px!important;margin-bottom:26px!important}
+.reqfs .dt-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.reqfs .dt-meta .mono{font-size:11.5px;font-weight:600;letter-spacing:.07em;opacity:.55}
+.reqfs .dt-title{font-size:28px!important;letter-spacing:-.025em;line-height:1.15;font-weight:640;display:flex;align-items:baseline;gap:13px;flex-wrap:wrap}
+.reqfs .dt-title .campchip.big{font-size:12px;padding:5px 12px;border-radius:999px;background:var(--primary-soft);color:var(--primary-deep,var(--primary));font-weight:600;border:0;align-self:center}
+.reqfs .dt-sub{font-size:13.5px;color:var(--muted);margin-top:10px;line-height:1.55}
+.reqfs .badge{border-radius:999px}
 
-/* pipeline */
-.reqfs .pipeline{margin:18px 0 24px;padding:16px 18px;background:var(--surface-2);border:1px solid var(--line);border-radius:16px}
+/* pipeline — quiet, no box */
+.reqfs .pipeline{margin:6px 0 28px!important;padding:0!important;background:none!important;border:0!important}
 
-/* discovery clock strip — hero */
-.reqfs .disc-strip{border-radius:18px;padding:18px 22px;margin:6px 0 18px;
-  background:linear-gradient(135deg,var(--surface),var(--surface-2));border:1px solid var(--line);
-  box-shadow:0 20px 40px -32px rgba(24,24,60,.5)}
-.reqfs .disc-strip.on{background:linear-gradient(135deg,rgba(14,164,114,.10),rgba(88,71,235,.06));border-color:rgba(14,164,114,.4)}
-.reqfs .disc-strip .dsk{font-size:11px;letter-spacing:.08em}
-.reqfs .disc-strip .dsv{font-size:34px;letter-spacing:.5px}
+/* discovery clock — calm card, subtle green when live */
+.reqfs .disc-strip{border-radius:16px!important;padding:18px 22px!important;margin:0 0 24px!important;background:var(--surface)!important;border:1px solid var(--line)!important;box-shadow:none!important}
+.reqfs .disc-strip.on{border-color:rgba(14,164,114,.32)!important;background:rgba(14,164,114,.035)!important}
+.reqfs .disc-strip .dsk{font-size:10px;letter-spacing:.1em;font-weight:700;text-transform:uppercase}
+.reqfs .disc-strip .dsv{font-size:32px;letter-spacing:.4px;margin-top:3px}
 .reqfs .disc-timer{font-variant-numeric:tabular-nums}
 
-/* spec grid → premium stat tiles that fill the width */
-.reqfs .specgrid{grid-template-columns:repeat(auto-fill,minmax(196px,1fr))!important;gap:12px!important;background:none!important;border:none!important;border-radius:0!important;overflow:visible!important;margin:22px 0 8px!important}
-.reqfs .specgrid .s{background:var(--surface);border:1px solid var(--line);border-radius:15px;padding:15px 16px;position:relative;overflow:hidden;
-  transition:transform .18s cubic-bezier(.3,.7,.3,1),box-shadow .22s,border-color .18s}
-.reqfs .specgrid .s::before{content:"";position:absolute;left:0;top:12px;bottom:12px;width:3px;border-radius:3px;background:linear-gradient(var(--primary),var(--accent,#0ea472));opacity:0;transition:opacity .2s}
-.reqfs .specgrid .s:hover{transform:translateY(-4px);box-shadow:0 18px 34px -20px rgba(24,24,60,.4);border-color:rgba(88,71,235,.35)}
-.reqfs .specgrid .s:hover::before{opacity:1}
-.reqfs .specgrid .s .k{font-size:10.5px;letter-spacing:.07em;color:var(--muted)}
-.reqfs .specgrid .s .v{font-size:15.5px;font-family:var(--disp);font-weight:600;margin-top:5px;line-height:1.25}
+/* spec grid — clean divided sheet (no chunky cards, no jumpy hover) */
+.reqfs .specgrid{grid-template-columns:repeat(auto-fill,minmax(215px,1fr))!important;gap:0!important;background:var(--surface)!important;border:1px solid var(--line)!important;border-radius:16px!important;overflow:hidden!important;margin:0 0 6px!important}
+.reqfs .specgrid .s{background:transparent!important;border-right:1px solid var(--line-2)!important;border-bottom:1px solid var(--line-2)!important;padding:16px 20px!important;transition:background .16s}
+.reqfs .specgrid .s:hover{background:var(--surface-2)!important}
+.reqfs .specgrid .s .k{font-size:10.5px;letter-spacing:.06em;color:var(--muted);font-weight:600}
+.reqfs .specgrid .s .v{font-size:14.5px;font-weight:600;margin-top:6px;line-height:1.35}
 
-/* section headers with accent bar */
-.reqfs .sec-t{position:relative;font-family:var(--disp);font-size:16px;font-weight:600;letter-spacing:-.01em;margin:26px 0 12px;padding-left:14px}
-.reqfs .sec-t::before{content:"";position:absolute;left:0;top:2px;bottom:2px;width:4px;border-radius:4px;background:linear-gradient(var(--primary),var(--accent,#0ea472))}
+/* section headers — quiet uppercase labels */
+.reqfs .sec-t{position:relative;font-family:var(--disp);font-size:11.5px!important;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:32px 0 13px!important;padding:0!important;display:flex;align-items:center;gap:9px}
+.reqfs .sec-t::before{content:none!important}
+.reqfs .sec-t .badge{letter-spacing:0}
 
-/* inner cards + notices */
-.reqfs .card{border-radius:16px;border:1px solid var(--line);transition:box-shadow .2s,border-color .18s}
-.reqfs .card:hover{box-shadow:0 16px 34px -24px rgba(24,24,60,.3)}
-.reqfs .notice{border-radius:14px}
+/* inner cards, notices, tables — calm */
+.reqfs .card{border-radius:14px;border:1px solid var(--line)}
+.reqfs .notice{border-radius:12px}
 .reqfs .roundws{border-radius:16px}
-
-/* tables — premium */
-.reqfs .revtable,.reqfs .tblwrap{border-radius:14px;border:1px solid var(--line);overflow:hidden}
-.reqfs table.tbl{border-collapse:separate;border-spacing:0}
-.reqfs table.tbl thead th{background:var(--surface-2);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);padding:11px 12px;border-bottom:1px solid var(--line)}
-.reqfs table.tbl tbody td{padding:11px 12px;border-bottom:1px solid var(--line-2)}
-.reqfs table.tbl tbody tr:last-child td{border-bottom:none}
+.reqfs .revtable,.reqfs .tblwrap{border-radius:12px;border:1px solid var(--line);overflow:hidden}
+.reqfs table.tbl thead th{background:var(--surface-2);font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);padding:11px 12px}
 .reqfs table.tbl tbody tr{transition:background .14s}
-.reqfs table.tbl tbody tr:hover{background:var(--primary-soft)}
+.reqfs table.tbl tbody tr:hover{background:var(--surface-2)}
 
 /* pick buttons in review */
 .reqfs .pickb{transition:transform .12s,background .16s,color .16s,border-color .16s}
 .reqfs .pickb:hover{transform:translateY(-1px)}
 
-/* Open animation lives on the persistent #fs container, so it plays once when
-   the panel opens and never re-fires on the re-renders that follow each action. */
-#fs{animation:premUp .4s cubic-bezier(.22,.8,.3,1)}
-@keyframes premUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
-@media (prefers-reduced-motion:reduce){#fs{animation:none}}
+/* ---- elegant staggered OPEN animation ----
+   JS adds .fs-anim to the persistent #fs ONLY on a fresh open (not on the
+   re-renders after each action), so sections cascade in once and never flicker. */
+@media (prefers-reduced-motion:no-preference){
+  #fs.fs-anim .reqfs{animation:sheetIn .52s cubic-bezier(.22,.85,.28,1) both}
+  #fs.fs-anim .reqfs>.dt-top{animation:sectionIn .55s cubic-bezier(.22,.85,.28,1) both;animation-delay:.05s}
+  #fs.fs-anim .reqfs>.mbody>*{animation:sectionIn .55s cubic-bezier(.22,.85,.28,1) both}
+  #fs.fs-anim .reqfs>.mbody>*:nth-child(1){animation-delay:.10s}
+  #fs.fs-anim .reqfs>.mbody>*:nth-child(2){animation-delay:.16s}
+  #fs.fs-anim .reqfs>.mbody>*:nth-child(3){animation-delay:.22s}
+  #fs.fs-anim .reqfs>.mbody>*:nth-child(4){animation-delay:.28s}
+  #fs.fs-anim .reqfs>.mbody>*:nth-child(5){animation-delay:.34s}
+  #fs.fs-anim .reqfs>.mbody>*:nth-child(n+6){animation-delay:.40s}
+  @keyframes sheetIn{from{opacity:0;transform:translateY(18px) scale(.99)}to{opacity:1;transform:none}}
+  @keyframes sectionIn{from{opacity:0;transform:translateY(15px)}to{opacity:1;transform:none}}
+}
 </style>
 
 
@@ -2508,7 +2500,7 @@ const App={
   pushEvent(r,tx,kind){r.events.push({t:now(),by:this.me.id,tx,kind:kind||'info'});r.updatedAt=now();},
 
   openReq(id){
-    const r=this.req(id);if(!r)return;const camp=this.camp(r.campaignId);this._openReqId=id;
+    const r=this.req(id);if(!r)return;const camp=this.camp(r.campaignId);const _fresh=this._openReqId!==id;this._openReqId=id;
     const stageIdx=STAGES.findIndex(s=>s[0]===r.status);
     const pipe=`<div class="pipeline">${STAGES.map((s,i)=>{let cls=i<stageIdx?'done':i===stageIdx?'cur':'';if(r.status==='approved')cls=i<=stageIdx?'done':'';return `<div class="st ${cls}"><div class="bar"></div><div class="node"></div><div class="lb">${s[1]}</div></div>`;}).join('')}</div>`;
     const spec=(k,v)=>`<div class="s"><div class="k">${k}</div><div class="v">${v}</div></div>`;
@@ -4088,7 +4080,10 @@ const App={
       </div>`);
   },
   async addRosterNote(id){const inp=document.getElementById('rnote_'+id);const t=inp.value.trim();if(!t)return;const r=this.db.roster.find(x=>x.id===id);r.notes=r.notes||[];r.notes.unshift({by:this.me.id,t:now(),text:t});await this.save('roster');inp.value='';this.rosterDashboard(id);},
-  closeFs(){const fs=document.getElementById('fs');fs.classList.remove('on');fs.innerHTML='';},
+  closeFs(){const fs=document.getElementById('fs');fs.classList.remove('on','fs-anim');fs.innerHTML='';this._openReqId=null;clearTimeout(this._fsAnimT);},
+  // Plays the staggered open animation ONCE (on a fresh open). Removed after it
+  // finishes so the re-renders that follow each action never re-trigger it.
+  playFsOpen(){const fs=document.getElementById('fs');if(!fs)return;fs.classList.remove('fs-anim');void fs.offsetWidth;fs.classList.add('fs-anim');clearTimeout(this._fsAnimT);this._fsAnimT=setTimeout(()=>{const f=document.getElementById('fs');if(f)f.classList.remove('fs-anim');},1300);},
   relatedFor(r){
     if(!r)return {campaigns:[],requests:[],brands:[]};
     const h=this.cnorm(r.handle);
@@ -5833,6 +5828,9 @@ Object.assign(App,{
     box.innerHTML=picks.length?`<div class="cellsub" style="margin-bottom:5px">${picks.length} pre-picked creator${picks.length!==1?'s':''} — they drop straight into round 1:</div>`+picks.map(r=>`<span class="tag" style="margin:2px">${esc(r.name||('@'+r.handle))} <span class="cellsub">${nfmt(r.followers)}</span> <span onclick="App.reqUnpick('${r.id}')" style="cursor:pointer;font-weight:700">×</span></span>`).join(''):'';
   },
   async submitReq(draft){
+    if(this._raising)return this.toast('Still saving the last one — one moment…','ok');
+    this._raising=true;
+    try{
     const bsel=document.getElementById('nq_brand').value,niche=document.getElementById('nq_niche').value.trim();
     // Brand website is mandatory on every request (new or existing brand).
     const wraw=(document.getElementById('nq_website').value||'').trim();if(!wraw)return this.toast('Brand website is required','err');
@@ -5888,11 +5886,12 @@ Object.assign(App,{
     this.closeAll();this.toast(draft?'Saved as draft':`Request raised for ${campName} 🎯`,'ok');this.renderNav();this.go('requests');
     if(!draft)this.fireWebhook('request.raised',{id:r.id,brand:brandName,campaign:campName,niche,type,round:r.round,requester:this.me.name});
     if(!draft)this.sendMailChain(r,'raised');
+    }finally{this._raising=false;}
   },
 
   /* ---------------- REQUEST DETAIL ---------------- */
   openReq(id){
-    const r=this.req(id);if(!r)return;const camp=this.camp(r.campaignId);this._openReqId=id;
+    const r=this.req(id);if(!r)return;const camp=this.camp(r.campaignId);const _fresh=this._openReqId!==id;this._openReqId=id;
     const campNm=this.campName(r.campaignId)||r.campaignName||'';
     const stageIdx=STAGES.findIndex(s=>s[0]===r.status);
     const pipe=`<div class="pipeline">${STAGES.map((s,i)=>{let cls=i<stageIdx?'done':i===stageIdx?'cur':'';if(r.status==='approved')cls=i<=stageIdx?'done':'';return `<div class="st ${cls}"><div class="bar"></div><div class="node"></div><div class="lb">${s[1]}</div></div>`;}).join('')}</div>`;
@@ -5964,6 +5963,7 @@ Object.assign(App,{
       </div>`);
     if(openRd&&(this.canRunDiscovery(r)||this.can('admin')))this.wireDrop(r.id);
     this.startDiscTick(id);
+    if(_fresh)this.playFsOpen();
   },
 
   /* plain-text summary of a request — for the "Copy summary" button */
