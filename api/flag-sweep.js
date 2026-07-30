@@ -34,12 +34,16 @@ module.exports = async (req, res) => {
   const sb = createClient(url, key);
   const now = Date.now();
   try {
-    const [{ data: reqRows }, { data: profRows }, { data: kvRow }] = await Promise.all([
+    const [{ data: reqRows }, { data: profRows }, { data: teamRows }, { data: kvRow }] = await Promise.all([
       sb.from('requests').select('id,data'),
-      sb.from('profiles').select('id,email,status,role_key,role,locked'),
+      sb.from('profiles').select('id,email,status,role_key,role,locked,team_uid'),
+      sb.from('teams').select('id,manager_id'),
       sb.from('kv').select('value').eq('key', 'dd:flagsweep').maybeSingle(),
     ]);
     const prof = {}; (profRows || []).forEach(p => { prof[p.id] = p; });
+    // team id -> its manager id, so a flag reaches the RESPECTIVE team manager
+    // of the assigned discovery employee (a manager may run more than one team).
+    const teamMgr = {}; (teamRows || []).forEach(t => { if (t.manager_id) teamMgr[t.id] = t.manager_id; });
     const primaryAdmins = (profRows || []).filter(p => p.status === 'active' && p.email && (p.locked === true || p.role === 'admin' || p.role_key === 'admin'));
     const marker = (kvRow && kvRow.value) || {};
     let sent = 0, flaggedCount = 0;
@@ -50,8 +54,14 @@ module.exports = async (req, res) => {
       if (!f.length) { if (marker[row.id]) delete marker[row.id]; continue; }
       flaggedCount++;
       if (marker[row.id] === sig) continue;            // already emailed this exact flag state
-      // TO = requester + routed manager + assigned discovery; CC = permanent admin
-      const toIds = [d.requesterId, d.routedToManagerId, d.assigneeId, d.assignedToId].filter(Boolean);
+      // Overdue/flag alerts go ONLY to the discovery employee, that employee's
+      // respective team manager, and (CC) the permanent admin — NOT the Sales/KAM
+      // requester. The manager is resolved from the employee's own team so a
+      // manager running two teams is only pinged for their own people.
+      const empId = d.assigneeId || d.assignedToId;
+      const emp = empId ? prof[empId] : null;
+      const mgrId = (emp && emp.team_uid && teamMgr[emp.team_uid]) || d.routedToManagerId || null;
+      const toIds = [empId, mgrId].filter(Boolean);
       const to = [...new Set(toIds.map(id => prof[id]).filter(p => p && p.email && p.status === 'active').map(p => p.email))];
       const cc = [...new Set(primaryAdmins.map(p => p.email))].filter(e => !to.includes(e));
       marker[row.id] = sig;
