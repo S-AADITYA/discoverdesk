@@ -5408,7 +5408,10 @@ Object.assign(App,{
     const a=r&&r.requesterId&&this.user(r.requesterId);
     return a?a.name:'the Sales/KAM who raised this';
   },
-  canRunDiscovery(r){return !!r&&this.can('discover')&&(r.assigneeId===this.me.id||this.can('admin')||this.can('assign'));},
+  // A Discovery Manager delivers profiles ONLY on requests they've self-assigned
+  // (assigneeId === them). They can still take a request via the Assign panel
+  // (assignTargets includes themselves); until then, no upload/submit. Admin always.
+  canRunDiscovery(r){return !!r&&this.can('discover')&&(r.assigneeId===this.me.id||this.can('admin'));},
   canFillRound(r){return !!r&&this.discRunning(r)&&!!this.openRound(r)&&(this.canRunDiscovery(r)||this.isRequester(r)||this.can('poolfill'));},
 
   newRound(r,why){
