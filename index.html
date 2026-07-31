@@ -2791,6 +2791,64 @@ const App={
     return 'Pick who delivers this brief.';
   },
   async assignReq(id){const r=this.req(id);const who=document.getElementById('assignSel').value;const tgt=this.assignTargets();if(!tgt.some(u=>u.id===who))return this.toast('You can only assign to '+(this.dept()==='sales'||this.dept()==='kam'?'a Discovery Manager':'a discovery person'),'err');this.recordHop(r,who);if(this._enqDirty){this._enqDirty=false;await this.save('enq');}this.pushEvent(r,'Assigned to '+this.user(who).name,'assign');await this.notify(who,'Request assigned to you',`${r.id} · ${r.brandName}${r.discoveryStartedAt?' — discovery clock started':''}`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned ${r.id}`,body:`You've been assigned ${r.id} (${r.brandName}).${r.discoveryStartedAt?' The discovery clock has started — add creators and submit each round.':''}`});await this.save('reqs');this.syncActsLocal();await this.save('acts');if(this.dept()==='sales'||this.dept()==='kam'){if(r.routedToManagerId)this.sendMailChain(r,'routed');}else if(r.assigneeId)this.sendMailChain(r,'assigned');this.toast(r.discoveryStartedAt?'Assigned — discovery clock started ⏱':'Assigned','ok');this.renderNav();this.openReq(id);},
+  /* ---- workload-aware assignment picker (Discovery Manager) ---- */
+  // Live workload for one discovery person: open briefs on their plate, how many
+  // fall due today / tomorrow / day-after, and how many are past-due & still open.
+  empWorkload(uid){
+    const s=D(now());s.setHours(0,0,0,0);const t0=s.getTime(),day=864e5;
+    const mine=this.db.reqs.filter(r=>!r.deletedAt&&r.assigneeId===uid&&!['approved','draft'].includes(r.status));
+    let today=0,tmrw=0,d2=0,late=0;
+    mine.forEach(r=>{
+      const sub=!!this.submittedRound(r);
+      if(r.deadline&&r.deadline<now()&&!sub){late++;return;}   // past-due & still their turn
+      if(sub||!r.deadline)return;                              // submitted = not upcoming load
+      const dl=D(r.deadline);dl.setHours(0,0,0,0);const d0=dl.getTime();
+      if(d0===t0)today++;else if(d0===t0+day)tmrw++;else if(d0===t0+2*day)d2++;
+    });
+    return {active:mine.length,today,tmrw,d2,late};
+  },
+  // Pop-up the manager sees when assigning / reassigning: every discovery employee
+  // (plus the manager themselves) with their load, so they pick who's free.
+  assignPicker(id){
+    const r=this.req(id);if(!r)return;
+    if(!(roleKey(this.me)==='discovery_manager'||this.can('admin')))return this.toast('Only a Discovery Manager or admin can assign discovery people.','err');
+    let cand=this.db.users.filter(u=>u.status==='active'&&roleKey(u)==='discovery_employee');
+    if(roleKey(this.me)==='discovery_manager'&&!cand.some(u=>u.id===this.me.id))cand=[this.me,...cand];
+    const rows=cand.map(u=>({u,w:this.empWorkload(u.id)})).sort((a,b)=>(a.w.late-b.w.late)||(a.w.active-b.w.active));
+    const cur=r.assigneeId;
+    const chip=(n,color)=>`<span class="mono" style="${n?`color:${color};font-weight:700`:'opacity:.5'}">${n||0}</span>`;
+    const body=rows.map(({u,w})=>{
+      const isCur=u.id===cur;
+      return `<tr style="${isCur?'background:var(--surface-2)':''}">
+        <td><div class="strong">${esc(u.name)}${u.id===this.me.id?' <span class="cellsub">(you)</span>':''}${isCur?' <span class="badge b-progress" style="text-transform:none">current</span>':''}</div><div class="cellsub">${esc(this.teamName(u)||ROLES[roleKey(u)]||'Discovery')}</div></td>
+        <td class="mono" style="font-weight:700">${w.active}</td>
+        <td>${chip(w.today,'#e0900a')}</td>
+        <td>${chip(w.tmrw,'var(--ink)')}</td>
+        <td>${chip(w.d2,'var(--ink)')}</td>
+        <td>${chip(w.late,'var(--danger)')}</td>
+        <td style="text-align:right">${isCur?'<span class="cellsub">assigned</span>':`<button class="btn primary xs" onclick="App.assignPick('${id}','${u.id}')">${cur?'Replace':'Assign'}</button>`}</td>
+      </tr>`;
+    }).join('');
+    this.modal(`<div class="mhead"><div><h3>${cur?'Reassign':'Assign'} discovery</h3><p>${esc(r.id)} · ${esc(r.brandName)} — pick the person with the lightest load</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div>
+      <div class="mbody">
+        <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Discovery employee</th><th title="Open briefs on their plate">Active</th><th>Today</th><th>Tmrw</th><th>Day +2</th><th title="Past-due & still open">Overdue</th><th></th></tr></thead><tbody>${body||'<tr><td colspan="7" class="cellsub">No active discovery employees to assign.</td></tr>'}</tbody></table></div>
+        <div class="cellsub" style="margin-top:8px"><b>Active</b> = open briefs · <b>Today / Tmrw / Day +2</b> = upcoming deadlines · <b>Overdue</b> = past-due & still their turn. Sorted lightest-load first.</div>
+      </div>`);
+  },
+  async assignPick(id,uid){
+    const r=this.req(id),u=this.user(uid);if(!r||!u)return;
+    const tgt=this.assignTargets();
+    if(!tgt.some(x=>x.id===uid)&&!this.can('admin'))return this.toast('You can only assign to a discovery person.','err');
+    const prev=r.assigneeId;
+    this.recordHop(r,uid);
+    this.pushEvent(r,(prev&&prev!==uid?'Reassigned to ':'Assigned to ')+u.name,'assign');
+    await this.notify(uid,'Request assigned to you',`${r.id} · ${r.brandName}${r.discoveryStartedAt?' — discovery clock started':''}`,'assign',{pref:'assigned',subject:`[DiscoverDesk] Assigned ${r.id}`,body:`You've been assigned ${r.id} (${r.brandName}).${r.discoveryStartedAt?' The discovery clock is running — add creators and submit each round.':''}`});
+    await this.save('reqs');this.syncActsLocal();await this.save('acts');
+    if(r.assigneeId)this.sendMailChain(r,'assigned');
+    this.closeAll();
+    this.toast(prev&&prev!==uid?`Reassigned to ${u.name}`:`Assigned to ${u.name}`,'ok');
+    this.renderNav();this.openReq(id);
+  },
   async publishDraft(id){const r=this.req(id);r.status='assigned';this.pushEvent(r,'Request published','create');await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Published','ok');this.renderNav();this.openReq(id);},
   async startWork(id){const r=this.req(id);r.status='in_progress';r.startedAt=now();this.pushEvent(r,'Started discovery','info');await this.save('reqs');this.syncActsLocal();await this.save('acts');this.toast('Marked in discovery','ok');this.openReq(id);},
   wireDrop(id){const dz=document.getElementById('dropZone');if(!dz)return;['dragover','dragenter'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.add('drag');}));['dragleave','drop'].forEach(e=>dz.addEventListener(e,ev=>{ev.preventDefault();dz.classList.remove('drag');}));dz.addEventListener('drop',ev=>{const f=ev.dataTransfer.files[0];if(f)this.parseSheet(f,id);});},
@@ -6034,7 +6092,8 @@ Object.assign(App,{
         ${(r.discoveryStartedAt||(r.rounds||[]).length)?this.timeReportHTML(r):''}
         ${this.reqDocsHTML(r)}
         ${(r.suggestedCreators&&r.suggestedCreators.length)?`<div class="sec-t">Client-requested creators <span class="cellsub">(${r.suggestedCreators.length})</span></div><div class="card pad" style="margin-bottom:14px;background:var(--surface-2)"><div class="cellsub" style="margin-bottom:8px">Pre-picked by ${esc(this.user(r.requesterId)?.name||'Sales/KAM')}.${openRd?' <b>Push them into the open round →</b>':''}</div>${r.suggestedCreators.map(sc=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--line-2)"><div><b style="font-size:13px">${esc(sc.name||('@'+sc.handle))}</b> <span class="cellsub">${nfmt(sc.followers||0)} · ${esc(sc.cats||sc.category||'—')}</span></div><div style="display:flex;gap:6px;align-items:center"><span class="cellsub">${esc(sc.reason||'')} · ${esc(sc.addedByName||'—')}</span>${(openRd&&this.canFillRound(r))?`<button class="btn ghost xs" onclick="App.roundAdd('${r.id}','${esc(sc.handle)}','client-requested','Client requested').then(()=>App.openReq('${r.id}'))">→ Round ${openRd.round}</button>`:''}</div></div>`).join('')}</div>`:''}
-        ${!r.assigneeId&&r.status!=='draft'&&(this.can('assign')||(r.requesterId===this.me.id&&!r.routedToManagerId))?(()=>{const tgt=this.assignTargets();return tgt.length?`<div class="sec-t">Assign discovery</div><div class="cellsub" style="margin:-4px 0 8px">${this.assignHint()}</div><div style="display:flex;gap:8px"><select class="mini-select" id="assignSel" style="flex:1">${tgt.map(u=>`<option value="${u.id}">${esc(u.name)}${u.id===this.me.id?' (you)':''} · ${ROLES[roleKey(u)]}</option>`).join('')}</select><button class="btn primary sm" onclick="App.assignReq('${r.id}')">Assign</button></div>`:`<div class="sec-t">Assign discovery</div><div class="notice" style="font-size:12px">${svg(IC.bolt,13)}<div>No eligible people to assign to yet.</div></div>`;})():''}
+        ${!r.assigneeId&&r.status!=='draft'&&(this.can('assign')||(r.requesterId===this.me.id&&!r.routedToManagerId))?(()=>{const tgt=this.assignTargets();if(!tgt.length)return `<div class="sec-t">Assign discovery</div><div class="notice" style="font-size:12px">${svg(IC.bolt,13)}<div>No eligible people to assign to yet.</div></div>`;const routesToMgr=this.dept()==='sales'||this.dept()==='kam';return `<div class="sec-t">Assign discovery</div><div class="cellsub" style="margin:-4px 0 8px">${this.assignHint()}</div>`+(routesToMgr?`<div style="display:flex;gap:8px"><select class="mini-select" id="assignSel" style="flex:1">${tgt.map(u=>`<option value="${u.id}">${esc(u.name)}${u.id===this.me.id?' (you)':''} · ${ROLES[roleKey(u)]}</option>`).join('')}</select><button class="btn primary sm" onclick="App.assignReq('${r.id}')">Assign</button></div>`:`<button class="btn primary sm" onclick="App.assignPicker('${r.id}')">${svg(IC.people,15)} Choose discovery employee →</button>`);})():''}
+        ${r.assigneeId&&r.status!=='approved'&&(roleKey(this.me)==='discovery_manager'||this.can('admin'))?`<div class="actbar" style="margin-top:8px;gap:8px"><span class="cellsub" style="align-self:center">Assigned to <b>${esc(this.user(r.assigneeId)?.name||'—')}</b></span><button class="btn ghost sm" onclick="App.assignPicker('${r.id}')">${svg(IC.people,14)} Reassign / replace</button></div>`:''}
         ${r.status==='draft'&&r.requesterId===this.me.id?`<div class="actbar"><button class="btn primary sm" onclick="App.publishDraft('${r.id}')">${svg(IC.up,15)} Publish request</button></div>`:''}
         ${ws}
         <div class="sec-t">Selection rounds ${r.rounds.length?`<span class="badge b-draft" style="text-transform:none">${r.rounds.length}</span>`:''}</div>
