@@ -1622,7 +1622,7 @@ const App={
   enter(){document.getElementById('auth').style.display='none';const sh=document.getElementById('shell');sh.classList.add('on');sh.classList.remove('enter-anim');void sh.offsetWidth;sh.classList.add('enter-anim');const cf=document.getElementById('chatFab');if(cf)cf.style.display='grid';this.applyTheme();this.renderNav();this.renderMe();this.refreshBell();this.renderLive();this.startLive();this.startClock();this.startAutoRefresh();this.maybeFlagSweep();this.go('dashboard');setTimeout(()=>this.maybeTour(),1000);},
   // Nudge the server flag-sweep at most once / 7h per browser (the cron also runs
   // it on schedule). The server de-dupes, so overdue emails go out ~every 7h.
-  maybeFlagSweep(){if(!CLOUD)return;try{const last=+(localStorage.getItem('dd_flagsweep_last')||0);if(Date.now()-last<7*36e5)return;localStorage.setItem('dd_flagsweep_last',String(Date.now()));fetch(API('/api/flag-sweep')).catch(()=>{});}catch(e){}},
+  maybeFlagSweep(){/* disabled — flag/overdue alerts are in-app (bell) only, no emails */},
   async maybeTour(){try{const seen=await store.pget('dd:toured');if(!seen){this.helpTour();await store.pset('dd:toured',1);}}catch(e){}},
   startAutoRefresh(){
     if(this._ar)return;
@@ -2118,6 +2118,9 @@ const App={
   },
   async sendMailChain(r,phase){
     if(!CLOUD||!r)return;
+    // Only request-lifecycle + round-submission events email. Flag / overdue /
+    // reminder alerts are in-app (bell) only — no emails.
+    if(phase==='reminder'||phase==='flagged')return;
     const {to,cc}=this.mailRecipients(r); if(!to.length&&!cc.length)return;
     const subject=this.mailChainSubject(r);   // stable across the whole thread
     const camp=r.campaignName||this.campName(r.campaignId)||'—';
@@ -2618,7 +2621,7 @@ const App={
     const handle=this.cnorm(this.cget(row,['handle','username','instagram','insta','ig','profile url','profile link','profile','link','url','account','channel'])||this.cget(row,['name'])||'');
     const nm=this.cgetTxt(row,['name','full name','creator'],60)||('@'+handle);
     const fol=this.cgetNum(row,['followers','follower','follow','audience size','subs']);
-    let eng=this.cgetPct(row,['engagement rate','engagement','eng rate','er']);
+    let eng=this.cgetPct(row,['engagement rate','engagement rate %','engagement','engagement %','avg engagement','average engagement','eng rate','eng','er %','er','interaction rate']);
     const known=this.resolveCreator(handle);
     if(!eng&&known&&known.eng)eng=this.cgetPct({e:known.eng},['e'])||(''+known.eng);
     const cats=known?this.catsHTML(known,4):esc(this.cgetTxt(row,['categories','category','niche','genre','vertical'],80)||'—');
@@ -2640,7 +2643,7 @@ const App={
     const handle=this.cnorm(this.cget(row,['handle','username','user','insta','profile','link','account'])||this.cget(row,['name'])||'');
     const nm=this.cget(row,['name','full name'])||('@'+handle);
     const fol=this.cgetNum(row,['followers','follower','follow','audience size','subscribers','subs']);
-    const eng=this.cgetPct(row,['engagement rate','engagement','eng rate','er']);
+    const eng=this.cgetPct(row,['engagement rate','engagement rate %','engagement','engagement %','avg engagement','average engagement','eng rate','eng','er %','er','interaction rate']);
     const city=this.cget(row,['city','location'])||'';
     const cat=this.cget(row,['categor','niche','genre'])||'';
     const cost=this.cnum(this.cget(row,['cost','price','rate','quote']));
@@ -2912,7 +2915,10 @@ const App={
   },
   /* typed getters — reject values that clearly aren't the thing we asked for */
   cgetNum(row,cands){const v=this.cget(row,cands);const s=(''+v).trim();if(!s)return 0;if(/[a-z]{4,}/i.test(s.replace(/\s*(k|m|b|lakh|cr)\s*$/i,'')))return 0;return this.cnum(s);},
-  cgetPct(row,cands){const v=(''+this.cget(row,cands)).trim();if(!v)return '';if(/^\d{1,2}(\.\d+)?\s*%$/.test(v))return v;const n=parseFloat(v);if(!isNaN(n)&&n>0&&n<=100&&v.length<=6)return n+'%';return '';},
+  // Pull an engagement % out of almost any format: "4.2%", "4.2", "5.2% ER",
+  // ">5%", "4,2%", "ER: 6.1", numeric cells — grabs the first number, keeps it
+  // only if it's a sane 0–100 rate, and always renders it as "N%".
+  cgetPct(row,cands){const raw=(''+this.cget(row,cands)).trim();if(!raw)return '';const m=raw.match(/\d+(?:[.,]\d+)?/);if(!m)return '';const n=parseFloat(m[0].replace(',','.'));if(isNaN(n)||n<=0||n>100)return '';return (Math.round(n*100)/100)+'%';},
   cgetTxt(row,cands,max){const v=(''+this.cget(row,cands)).trim();if(!v)return '';if(max&&v.length>max)return '';return v;},
   metaImg(r){
     if(!r)return '';
@@ -5713,7 +5719,7 @@ Object.assign(App,{
         rd.rows.push({handle:h,
           name:this.cgetTxt(row,['name','full name','creator'],60)||(known&&known.name)||h,
           followers:this.cgetNum(row,['followers','follower','follow','audience size','subs'])||(known&&known.followers)||0,
-          engagement:this.cgetPct(row,['engagement rate','engagement','eng rate','er'])||(known&&known.eng)||'',
+          engagement:this.cgetPct(row,['engagement rate','engagement rate %','engagement','engagement %','avg engagement','average engagement','eng rate','eng','er %','er','interaction rate'])||(known&&known.eng)||'',
           category:this.cgetTxt(row,['category','niche','genre','vertical'],30)||(known&&known.category)||r.niche||'',
           categories:known?this.catsText(known):'',
           city:this.cgetTxt(row,['city','location'],40)||(known&&known.city)||'',
