@@ -2796,14 +2796,13 @@ const App={
   // fall due today / tomorrow / day-after, and how many are past-due & still open.
   empWorkload(uid){
     const s=D(now());s.setHours(0,0,0,0);const t0=s.getTime(),day=864e5;
-    const mine=this.db.reqs.filter(r=>!r.deletedAt&&r.assigneeId===uid&&!['approved','draft'].includes(r.status));
+    // Every open brief on their plate — assigned either way (assigneeId or assignedToId).
+    const mine=this.db.reqs.filter(r=>!r.deletedAt&&(r.assigneeId===uid||r.assignedToId===uid)&&!['approved','draft'].includes(r.status));
     let today=0,tmrw=0,d2=0,late=0;
     mine.forEach(r=>{
-      const sub=!!this.submittedRound(r);
-      if(r.deadline&&r.deadline<now()&&!sub){late++;return;}   // past-due & still their turn
-      if(sub||!r.deadline)return;                              // submitted = not upcoming load
+      if(!r.deadline)return;                                   // no deadline set → counts in total only
       const dl=D(r.deadline);dl.setHours(0,0,0,0);const d0=dl.getTime();
-      if(d0===t0)today++;else if(d0===t0+day)tmrw++;else if(d0===t0+2*day)d2++;
+      if(d0<t0)late++;else if(d0===t0)today++;else if(d0===t0+day)tmrw++;else if(d0===t0+2*day)d2++;
     });
     return {active:mine.length,today,tmrw,d2,late};
   },
@@ -2812,8 +2811,7 @@ const App={
   assignPicker(id){
     const r=this.req(id);if(!r)return;
     if(!(roleKey(this.me)==='discovery_manager'||this.can('admin')))return this.toast('Only a Discovery Manager or admin can assign discovery people.','err');
-    let cand=this.db.users.filter(u=>u.status==='active'&&roleKey(u)==='discovery_employee');
-    if(roleKey(this.me)==='discovery_manager'&&!cand.some(u=>u.id===this.me.id))cand=[this.me,...cand];
+    const cand=this.db.users.filter(u=>u.status==='active'&&(roleKey(u)==='discovery_employee'||roleKey(u)==='discovery_manager'));
     const rows=cand.map(u=>({u,w:this.empWorkload(u.id)})).sort((a,b)=>(a.w.late-b.w.late)||(a.w.active-b.w.active));
     const cur=r.assigneeId;
     const chip=(n,color)=>`<span class="mono" style="${n?`color:${color};font-weight:700`:'opacity:.5'}">${n||0}</span>`;
@@ -2831,14 +2829,14 @@ const App={
     }).join('');
     this.modal(`<div class="mhead"><div><h3>${cur?'Reassign':'Assign'} discovery</h3><p>${esc(r.id)} · ${esc(r.brandName)} — pick the person with the lightest load</p></div><button class="xbtn" onclick="App.closeAll()">${svg(IC.x,16)}</button></div>
       <div class="mbody">
-        <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Discovery employee</th><th title="Open briefs on their plate">Active</th><th>Today</th><th>Tmrw</th><th>Day +2</th><th title="Past-due & still open">Overdue</th><th></th></tr></thead><tbody>${body||'<tr><td colspan="7" class="cellsub">No active discovery employees to assign.</td></tr>'}</tbody></table></div>
-        <div class="cellsub" style="margin-top:8px"><b>Active</b> = open briefs · <b>Today / Tmrw / Day +2</b> = upcoming deadlines · <b>Overdue</b> = past-due & still their turn. Sorted lightest-load first.</div>
+        <div class="card" style="overflow-x:auto"><table class="tbl"><thead><tr><th>Discovery person</th><th title="All open briefs on their plate">Total brands</th><th>Today</th><th>Tmrw</th><th>Day +2</th><th title="Deadline already passed">Overdue</th><th></th></tr></thead><tbody>${body||'<tr><td colspan="7" class="cellsub">No active discovery people to assign.</td></tr>'}</tbody></table></div>
+        <div class="cellsub" style="margin-top:8px"><b>Total brands</b> = open briefs on their plate · <b>Today / Tmrw / Day +2</b> = deadlines due then · <b>Overdue</b> = deadline already passed. Sorted lightest-load first.</div>
       </div>`);
   },
   async assignPick(id,uid){
     const r=this.req(id),u=this.user(uid);if(!r||!u)return;
-    const tgt=this.assignTargets();
-    if(!tgt.some(x=>x.id===uid)&&!this.can('admin'))return this.toast('You can only assign to a discovery person.','err');
+    if(!(roleKey(this.me)==='discovery_manager'||this.can('admin')))return this.toast('Only a Discovery Manager or admin can assign discovery.','err');
+    if(!(this.can('admin')||['discovery_employee','discovery_manager'].includes(roleKey(u))))return this.toast('Pick a discovery person.','err');
     const prev=r.assigneeId;
     this.recordHop(r,uid);
     this.pushEvent(r,(prev&&prev!==uid?'Reassigned to ':'Assigned to ')+u.name,'assign');
