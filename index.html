@@ -4887,7 +4887,6 @@ const App={
         </tbody></table>
       </div>
         <div class="card chart-card"><div class="ct">Rejection rounds by brand</div><div class="cs">Where profiles bounce</div>${Object.keys(rejBrand).length?bar(Object.entries(rejBrand).sort((a,b)=>b[1]-a[1])):'<div class="cellsub">No rejections 🎉</div>'}</div>
-      </div>
       <div class="two-col" style="margin-top:16px">
         <div class="card chart-card"><div class="ct">Rounds per request</div><div class="cs">How many sends before delivery</div>${(()=>{const f={'Round 1 only':0,'Went to Round 2':0,'Round 3+':0};R.forEach(r=>{const n=r.rounds.length;if(n>=3)f['Round 3+']++;else if(n===2)f['Went to Round 2']++;else f['Round 1 only']++;});return bar(Object.entries(f));})()}</div>
         <div class="card chart-card"><div class="ct">Enquiry funnel</div><div class="cs">New business by stage</div>${(()=>{const f={};this.db.enq.forEach(e=>f[e.status]=(f[e.status]||0)+1);const order=['new','qualified','proposal','won','lost'];const d=order.filter(k=>f[k]).map(k=>[k[0].toUpperCase()+k.slice(1),f[k]]);return d.length?bar(d):'<div class="cellsub">No enquiries yet</div>';})()}</div>
