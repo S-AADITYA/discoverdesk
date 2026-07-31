@@ -1424,32 +1424,37 @@ const App={
   async registerRoundToRoster(rows){
     if(!rows||!rows.length)return 0;
     const norm=h=>(''+(h||'')).trim().toLowerCase().replace(/^@/,'');
-    const pick=(row,names)=>{const k=Object.keys(row).find(k=>names.some(n=>k.toLowerCase().includes(n)));return k?(''+row[k]).trim():'';};
-    const fromLink=link=>{let u=link.split(/\s/)[0].split('?')[0].replace(/\/+$/,'');const bare=u.replace(/^@/,'');if(u&&!u.includes('/')&&!/\.(com|be|in|io)/i.test(u)&&/[a-z]/i.test(bare))return norm(bare);u=u.replace(/^https?:\/\//i,'').replace(/^(www|m)\./i,'');const p=u.split('/').filter(Boolean);if(p.length>=2&&/instagram|youtube|tiktok/.test(p[0])){const s=p[1].replace(/^@/,'');if(!['reel','reels','p','tv'].includes(s.toLowerCase()))return norm(s);}return '';};
-    const have=new Set(this.db.roster.map(r=>norm(r.handle)));
+    // rd.rows carry clean canonical fields (handle,name,followers,engagement,city,
+    // category,cost,platform). Prefer those; fall back to fuzzy key match for raw rows.
+    const g=(row,clean,names)=>{if(clean&&row[clean]!=null&&row[clean]!=='')return (''+row[clean]).trim();const k=Object.keys(row).find(k=>(names||[]).some(n=>k.toLowerCase().includes(n)));return k?(''+row[k]).trim():'';};
+    const fromLink=link=>{let u=(link||'').split(/\s/)[0].split('?')[0].replace(/\/+$/,'');const bare=u.replace(/^@/,'');if(u&&!u.includes('/')&&!/\.(com|be|in|io)/i.test(u)&&/[a-z]/i.test(bare))return norm(bare);u=u.replace(/^https?:\/\//i,'').replace(/^(www|m)\./i,'');const p=u.split('/').filter(Boolean);if(p.length>=2&&/instagram|youtube|tiktok/.test(p[0])){const s=p[1].replace(/^@/,'');if(!['reel','reels','p','tv'].includes(s.toLowerCase()))return norm(s);}return '';};
+    const have=new Set((this.db.roster||[]).map(r=>norm(r.handle)));
     const fresh=[];
     for(const row of rows){
-      let handle=norm(pick(row,['handle','username']));
-      const link=pick(row,['profile','link','url','instagram']);
-      const name=pick(row,['name']);
+      let handle=norm(g(row,'handle',['handle','username']));
+      const link=g(row,'profileUrl',['profile','link','url','instagram']);
+      const name=g(row,'name',['name']);
       if(!handle&&link)handle=fromLink(link);
       if(!handle&&name)handle=name.toLowerCase().replace(/[^a-z0-9]+/g,'.').replace(/^\.|\.$/g,'');
       if(!handle||have.has(handle))continue;
       have.add(handle);
-      const followers=parseInt(pick(row,['follower','subs']).replace(/[^\d]/g,''))||0;
-      const reel=parseInt(pick(row,['reel','cost','price']).replace(/[^\d]/g,''))||0;
-      const rec={id:'req:instagram:'+handle,handle,handles:{instagram:handle},name:name||handle,platform:'Instagram',
-        profileUrl:link||'',category:pick(row,['categor','niche']),city:pick(row,['city','location']),
-        followers,source:'request',verified:false,addedAt:now(),addedBy:this.me.id,pricing:reel?{reel}:{}};
+      const followers=parseInt((''+g(row,'followers',['follower','subs'])).replace(/[^\d]/g,''))||0;
+      const eng=g(row,'engagement',['engagement','eng']);
+      const reel=parseInt((''+g(row,'cost',['reel','cost','price'])).replace(/[^\d]/g,''))||0;
+      const rec={id:'req:instagram:'+handle,handle,handles:{instagram:handle},name:name||handle,platform:g(row,'platform',[])||'Instagram',
+        profileUrl:link||('https://instagram.com/'+handle),category:g(row,'category',['categor','niche']),city:g(row,'city',['city','location']),
+        followers,eng:eng||'',source:'request',verified:false,addedAt:now(),addedBy:this.me.id,addedByName:this.me.name,pricing:reel?{reel}:{}};
       if(reel)rec.reelCost=reel;
       this.db.roster.push(rec);fresh.push(rec);
     }
-    if(fresh.length){
-      if(CLOUD){const payload=fresh.map(r=>{const d={...r};delete d.email;delete d.phone;delete d._cmask;delete d.id;return {id:r.id,data:d,contact:{}};});
-        const {error}=await SB.rpc('roster_sync',{p_rows:payload,p_removed:[]});if(error)console.error('registerRoundToRoster',error);
-        if(this._rosterIds)fresh.forEach(r=>this._rosterIds.add(r.id));}
-      else await store.set(K.roster,this.db.roster);
-    }
+    if(!fresh.length)return 0;
+    if(this._rosterIds)fresh.forEach(r=>this._rosterIds.add(r.id));
+    if(typeof this._rosterTotal==='number')this._rosterTotal+=fresh.length;
+    if(CLOUD){
+      const payload=fresh.map(r=>{const d={...r};delete d.email;delete d.phone;delete d._cmask;delete d.id;return {id:r.id,data:d,contact:{}};});
+      try{const {error}=await SB.rpc('roster_sync',{p_rows:payload,p_removed:[]});if(error)throw error;}
+      catch(e){console.error('registerRoundToRoster',e);this.toast('Added to the round, but saving to the roster DB failed: '+(e.message||e),'err');}
+    }else{await store.set(K.roster,this.db.roster);}
     return fresh.length;
   },
   async nextSeq(pfx){let s=await store.get(K.seq)||{};s[pfx]=(s[pfx]||0)+1;await store.set(K.seq,s);return pfx+'-'+String(s[pfx]).padStart(4,'0');},
