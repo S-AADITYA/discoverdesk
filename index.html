@@ -2432,14 +2432,16 @@ const App={
     if(r.status==='draft')return {cat:'draft',label:'Draft',cls:'b-draft'};
     if(r.status==='rejected')return {cat:'rejected',label:'Rejected',cls:'b-rejected'};
     if(r.status==='approved'||r.discoveryEndedAt||r.closed)return {cat:'approved',label:'Delivered',cls:'b-approved'};
+    // No discovery EMPLOYEE yet → it's still with the manager (or nobody), even
+    // though routing auto-opened a round. Gate on the employee so awaiting-DM /
+    // unassigned requests aren't mislabeled "In Discovery".
+    const hasEmp=!!(r.assigneeId||r.assignedToId);
+    if(!hasEmp)return r.routedToManagerId?{cat:'awaiting_dm',label:'Awaiting DM',cls:'b-draft'}:{cat:'unassigned',label:'Unassigned',cls:'b-draft'};
     const sub=this.submittedRound(r),open=this.openRound(r);
-    const decided=(r.rounds||[]).filter(rd=>this.roundStatus(rd)==='decided').length;
     if(sub)return {cat:'under_review',label:`R${sub.round} submitted`,cls:'b-review'};
     if(open&&this.discRunning(r))return {cat:'in_progress',label:`R${open.round} · discovery`,cls:'b-progress'};
-    if(r.discoveryStartedAt&&!open&&!sub)return {cat:'in_progress',label:'Between rounds',cls:'b-progress'};
-    if(r.assigneeId||r.assignedToId)return {cat:'assigned',label:'Assigned',cls:'b-assigned'};
-    if(r.routedToManagerId)return {cat:'awaiting_dm',label:'Awaiting DM',cls:'b-draft'};
-    return {cat:'unassigned',label:'Unassigned',cls:'b-draft'};
+    if(r.discoveryStartedAt&&(r.rounds||[]).length>0&&!open&&!sub)return {cat:'in_progress',label:'Between rounds',cls:'b-progress'};
+    return {cat:'assigned',label:'Assigned',cls:'b-assigned'};
   },
   // Pipeline stage rank — groups the requests list top-to-bottom in the order work
   // actually flows, so unassigned / awaiting-DM (need action) sit on top and
@@ -2473,7 +2475,12 @@ const App={
         r.niche,
       ].some(v=>String(v||'').toLowerCase().includes(q)));
     }
-    if(f.status!=='all')R=R.filter(r=>this.reqLiveStatus(r).cat===f.status);
+    if(f.status!=='all'){const st=f.status;
+      if(st==='unassigned')R=R.filter(r=>!r.assigneeId&&!r.assignedToId&&!r.routedToManagerId&&r.status!=='approved'&&!r.discoveryEndedAt);
+      else if(st==='awaiting_dm')R=R.filter(r=>!r.assigneeId&&!r.assignedToId&&r.routedToManagerId&&r.status!=='approved'&&!r.discoveryEndedAt);
+      else if(st==='assigned')R=R.filter(r=>(r.assigneeId||r.assignedToId)&&r.status!=='approved'&&!r.discoveryEndedAt);
+      else R=R.filter(r=>this.reqLiveStatus(r).cat===st);
+    }
     if(f.special==='flagged')R=R.filter(r=>this.flags(r).length);
     if(f.special==='high')R=R.filter(r=>r.priority==='high');
     if(f.special==='overdue')R=R.filter(r=>r.deadline&&r.deadline<now()&&r.status!=='approved');
@@ -2485,7 +2492,7 @@ const App={
     const sel=R.filter(r=>this._rsel[r.id]).map(r=>r.id);
     const canAssign=this.can('assign');
     this.set(`
-      ${(()=>{const all=this.db.reqs.filter(x=>x.status!=='draft');const by=st=>all.filter(r=>r.status===st).length;const over=all.filter(r=>r.deadline&&r.deadline<now()&&r.status!=='approved').length;const unassigned=all.filter(r=>!r.assigneeId&&!r.assignedToId&&!r.routedToManagerId&&r.status!=='approved').length;const awaitingDm=all.filter(r=>!r.assigneeId&&!r.assignedToId&&r.routedToManagerId&&r.status!=='approved').length;const done=by('approved');const rate=all.length?Math.round(done/all.length*100):0;const kc=(l,v,col,click)=>`<div class="rqk" ${click?`onclick="${click}" style="cursor:pointer"`:''}><div class="rqk-v" style="${col?`color:${col}`:''}">${v}</div><div class="rqk-l">${l}</div></div>`;return `<div class="rqstrip">${kc('Open',all.length-done,'',`App.filters.status='all';App.filters.special=null;App.vRequests()`)}${kc('In discovery',by('in_progress'),'#5847eb',`App.filters.status='in_progress';App.vRequests()`)}${kc('In review',by('under_review'),'#7048e8',`App.filters.status='under_review';App.vRequests()`)}${kc('Delivered',done,'#0ea472',`App.filters.status='approved';App.vRequests()`)}${kc('Unassigned',unassigned,unassigned?'#e5484d':'',`App.filters.status='unassigned';App.filters.special=null;App.vRequests()`)}${kc('Awaiting DM',awaitingDm,awaitingDm?'#e0900a':'',`App.filters.status='awaiting_dm';App.filters.special=null;App.vRequests()`)}${kc('Overdue',over,over?'#e5484d':'',`App.filters.special='overdue';App.vRequests()`)}${kc('Delivery rate',rate+'%','#0ea472')}</div>`;})()}
+      ${(()=>{const all=this.db.reqs.filter(x=>x.status!=='draft');const cat=r=>this.reqLiveStatus(r).cat;const by=c=>all.filter(r=>cat(r)===c).length;const over=all.filter(r=>r.deadline&&r.deadline<now()&&r.status!=='approved').length;const unassigned=all.filter(r=>!r.assigneeId&&!r.assignedToId&&!r.routedToManagerId&&r.status!=='approved').length;const awaitingDm=all.filter(r=>!r.assigneeId&&!r.assignedToId&&r.routedToManagerId&&r.status!=='approved').length;const done=by('approved');const rate=all.length?Math.round(done/all.length*100):0;const kc=(l,v,col,click)=>`<div class="rqk" ${click?`onclick="${click}" style="cursor:pointer"`:''}><div class="rqk-v" style="${col?`color:${col}`:''}">${v}</div><div class="rqk-l">${l}</div></div>`;return `<div class="rqstrip">${kc('Open',all.length-done,'',`App.filters.status='all';App.filters.special=null;App.vRequests()`)}${kc('In discovery',by('in_progress'),'#5847eb',`App.filters.status='in_progress';App.vRequests()`)}${kc('In review',by('under_review'),'#7048e8',`App.filters.status='under_review';App.vRequests()`)}${kc('Delivered',done,'#0ea472',`App.filters.status='approved';App.vRequests()`)}${kc('Unassigned',unassigned,unassigned?'#e5484d':'',`App.filters.status='unassigned';App.filters.special=null;App.vRequests()`)}${kc('Awaiting DM',awaitingDm,awaitingDm?'#e0900a':'',`App.filters.status='awaiting_dm';App.filters.special=null;App.vRequests()`)}${kc('Overdue',over,over?'#e5484d':'',`App.filters.special='overdue';App.vRequests()`)}${kc('Delivery rate',rate+'%','#0ea472')}</div>`;})()}
       <div class="pagehead"><div class="lead"><h2>All requests</h2><p>${R.length} request${R.length!==1?'s':''} · ${this.redCount()} flagged · click a card above to filter</p></div>
         <div class="acts"><input class="inp" style="width:200px" placeholder="🔍 Search requests…" value="${esc(this._q||'')}" onkeydown="if(event.key==='Enter'){App._q=this.value.trim().toLowerCase();App.go('requests')}">${this._q?`<button class="btn ghost sm" onclick="App._q='';App.go('requests')">Clear</button>`:''}${this.canExport()?`<button class="btn ghost" onclick="App.exportReqs()">${svg(IC.down,15)} Export</button>`:''}${this.can('raise')?`<button class="btn primary" onclick="App.openNewReq()">${svg(IC.plus,16)} New request</button>`:''}</div></div>
       <div class="toolbar">${chips.map(([k,l])=>`<span class="chip ${f.status===k?'on':''}" onclick="App.filters.status='${k}';App.vRequests()">${l}</span>`).join('')}
