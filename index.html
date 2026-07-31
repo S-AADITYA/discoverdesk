@@ -2879,7 +2879,7 @@ const App={
   parseSheet(file,id){
     const r=this.req(id),reader=new FileReader();
     reader.onload=async e=>{try{
-      const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(ws,{defval:''});
+      const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(ws,{defval:'',raw:false});
       if(!rows.length)return this.toast('Sheet looks empty — no rows found','err');
       const check=this.validateSheet(rows);
       if(!check.ok)return this.sheetErrorModal(check);
@@ -2999,7 +2999,12 @@ const App={
   // Pull an engagement % out of almost any format: "4.2%", "4.2", "5.2% ER",
   // ">5%", "4,2%", "ER: 6.1", numeric cells — grabs the first number, keeps it
   // only if it's a sane 0–100 rate, and always renders it as "N%".
-  cgetPct(row,cands){const raw=(''+this.cget(row,cands)).trim();if(!raw)return '';const m=raw.match(/\d+(?:[.,]\d+)?/);if(!m)return '';const n=parseFloat(m[0].replace(',','.'));if(isNaN(n)||n<=0||n>100)return '';return (Math.round(n*100)/100)+'%';},
+  cgetPct(row,cands){const raw=(''+this.cget(row,cands)).trim();if(!raw)return '';const m=raw.match(/\d+(?:[.,]\d+)?/);if(!m)return '';let n=parseFloat(m[0].replace(',','.'));if(isNaN(n)||n<=0)return '';
+    // Spreadsheet percent cells store a fraction (32.21% -> 0.3221). When a value
+    // arrives WITHOUT a literal '%' and is a sub-1 fraction, it's really n*100 percent.
+    if(!raw.includes('%')&&n<1)n=n*100;
+    if(n>1000)return '';
+    return (Math.round(n*100)/100)+'%';},
   cgetTxt(row,cands,max){const v=(''+this.cget(row,cands)).trim();if(!v)return '';if(max&&v.length>max)return '';return v;},
   metaImg(r){
     if(!r)return '';
@@ -4356,7 +4361,7 @@ const App={
   rosterUpload(ev){
     const f=ev.target.files[0];if(!f)return;const reader=new FileReader();
     reader.onload=async e=>{try{
-      const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];let rows=XLSX.utils.sheet_to_json(ws,{defval:''});
+      const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];let rows=XLSX.utils.sheet_to_json(ws,{defval:'',raw:false});
       if(!rows.length)return this.toast('Sheet looks empty — no rows found','err');
       const MAXROWS=100000;
       if(rows.length>MAXROWS){this.toast(`That sheet has ${nfmt(rows.length)} rows — importing the first ${nfmt(MAXROWS)} to protect performance. Split the file for the rest.`,'err');rows=rows.slice(0,MAXROWS);}
@@ -5785,7 +5790,7 @@ Object.assign(App,{
     const r=this.req(id),reader=new FileReader();
     reader.onload=async e=>{try{
       const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'});
-      const ws=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(ws,{defval:''});
+      const ws=wb.Sheets[wb.SheetNames[0]];const rows=XLSX.utils.sheet_to_json(ws,{defval:'',raw:false});
       if(!rows.length)return this.toast('Sheet looks empty — no rows found','err');
       const check=this.validateSheet(rows);
       if(!check.ok)return this.sheetErrorModal(check);
