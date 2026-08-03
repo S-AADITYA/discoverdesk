@@ -2628,11 +2628,12 @@ const App={
       return `<tr>${first}${cols.map(c=>`<td>${esc(row[c])}</td>`).join('')}${fbCell}</tr>`;
     };
     return `<div class="round ${isLast?'open':''}"><div class="rh" onclick="this.parentElement.classList.toggle('open')"><span class="rn">Round ${rd.round}</span><span class="cellsub">${rd.total} profiles · ${fmtDT(rd.submittedAt)}</span><span class="spacer"></span>${badge}</div>
-      <div class="rbody"><div class="stat-inline"><div class="si"><div class="n">${rd.total}</div><div class="l">Submitted</div></div>${rd.approvedCount!=null?`<div class="si"><div class="n" style="color:var(--success)">${rd.approvedCount}</div><div class="l">Kept</div></div>`:''}${rd.rejectedCount!=null?`<div class="si"><div class="n" style="color:var(--danger)">${rd.rejectedCount}</div><div class="l">Rejected</div></div>`:''}</div>
+      <div class="rbody"><div class="stat-inline"><div class="si"><div class="n">${rd.total}</div><div class="l">Submitted</div></div>${rd.approvedCount!=null?`<div class="si"><div class="n" style="color:var(--success)">${rd.approvedCount}</div><div class="l">Kept</div></div>`:''}${rd.rejectedCount!=null?`<div class="si"><div class="n" style="color:var(--danger)">${rd.rejectedCount}</div><div class="l">Rejected</div></div>`:''}${rd.reviewedAt?`<div class="si"><div class="n mono" style="color:var(--primary);font-size:15px">${this.fmtHMS(this.reviewElapsedMs(rd))}</div><div class="l">Review time</div></div>`:''}</div>
       ${rd.reason?`<div class="notice" style="background:var(--danger-soft);border-color:#f5cccc;color:#b3282d">${svg(IC.x,15)}<div><b>Feedback to discovery:</b> ${linkify(rd.reason)}</div></div>`:''}
       ${reviewing?`
         <div class="revbar">
           <div style="flex:1"><div style="font-weight:600;font-size:13.5px">Shortlist the creators you want</div><div class="cellsub">Click ✓ to shortlist or ✗ to reject on each row · add a reason · then finish below.</div></div>
+          <div data-revsub="${rd.submittedAt}" style="display:flex;align-items:center;gap:8px;padding:6px 11px;background:var(--surface-2);border-radius:8px"><span class="cellsub" style="font-weight:700;font-size:10px;letter-spacing:.05em">⏱ REVIEW</span>${this.reviewTimerHTML(rd)}</div>
           <div class="rtab" style="margin:0"><button class="${(this._revView||'table')==='table'?'on':''}" onclick="App._revView='table';App.openReq('${r.id}')">Table</button><button class="${this._revView==='cards'?'on':''}" onclick="App._revView='cards';App.openReq('${r.id}')">Cards</button></div>
           <button class="btn ghost xs" onclick="App.markAll('${r.id}',${i},'approved')">Shortlist all</button>
           <button class="btn ghost xs" onclick="App.markAll('${r.id}',${i},'rejected')">Reject all</button>
@@ -2939,7 +2940,10 @@ const App={
   vReview(){
     const q=this.db.reqs.filter(r=>r.status==='under_review'&&(this.can('admin')||r.requesterId===this.me.id));
     this.set(`<div class="pagehead"><div class="lead"><h2>Review queue</h2><p>${q.length} submission${q.length!==1?'s':''} waiting for your call</p></div></div>
-      ${q.length?q.map(r=>{const rd=r.rounds[r.rounds.length-1];return `<div class="card pad" style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div class="mono cellsub">${r.id} · Round ${rd.round}</div><div style="font-family:var(--disp);font-weight:600;font-size:16px;margin:2px 0">${esc(r.brandName)}</div><div class="cellsub">${esc(r.niche)} · ${rd.total} profiles from ${this.user(rd.submittedBy)?.name||'—'}</div></div><div style="text-align:right"><div class="cellsub">Submitted</div><div style="font-weight:600;font-size:12.5px">${fmtDT(rd.submittedAt)}</div></div></div><div class="actbar" style="margin-top:12px"><button class="btn primary sm" onclick="App.openReq('${r.id}')">${svg(IC.review,14)} Review influencers</button></div></div>`;}).join(''):this.emptyBox('Nothing to review','Submissions land here for your decision.','')}`);
+      ${q.length?q.map(r=>{const rd=r.rounds[r.rounds.length-1];return `<div class="card pad" style="margin-bottom:12px"><div style="display:flex;justify-content:space-between;align-items:flex-start"><div><div class="mono cellsub">${r.id} · Round ${rd.round}</div><div style="font-family:var(--disp);font-weight:600;font-size:16px;margin:2px 0">${esc(r.brandName)}</div><div class="cellsub">${esc(r.niche)} · ${rd.total} profiles from ${this.user(rd.submittedBy)?.name||'—'}</div></div><div style="text-align:right"><div class="cellsub">Submitted</div><div style="font-weight:600;font-size:12.5px">${fmtDT(rd.submittedAt)}</div></div></div>
+        <div data-revsub="${rd.submittedAt}" style="margin-top:12px;display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--surface-2);border-radius:10px"><span class="cellsub" style="font-weight:700;letter-spacing:.05em;font-size:10.5px">⏱ REVIEW CLOCK</span>${this.reviewTimerHTML(rd)}</div>
+        <div class="actbar" style="margin-top:12px"><button class="btn primary sm" onclick="App.openReq('${r.id}')">${svg(IC.review,14)} Review influencers</button></div></div>`;}).join(''):this.emptyBox('Nothing to review','Submissions land here for your decision.','')}`);
+    this.startReviewTicks();
   },
 
   /* ================= BRAND SHEETS (influencers) ================= */
@@ -5669,6 +5673,27 @@ Object.assign(App,{
     if(offHrs)return clock+` <span class="cellsub" title="Working hours are Mon–Fri 10:30–19:30 — paused on weekends & off-hours">⏸ ${isWeekend(now())?'weekend':'off-hours'} · resumes ${fmtDT(nextWorkStart(now()))}</span>`;
     return clock;
   },
+  /* ---- Review clock: counts working hours a submitted round waits for the
+     reviewer's decision. Same Mon–Fri 10:30–19:30 window — pauses off-hours &
+     weekends automatically via workMsBetween. Runs submittedAt → reviewedAt. ---- */
+  reviewElapsedMs(rd){if(!rd||!rd.submittedAt)return 0;return workMsBetween(rd.submittedAt,rd.reviewedAt||now());},
+  reviewTimerHTML(rd){
+    if(!rd||!rd.submittedAt)return '';
+    const ms=this.reviewElapsedMs(rd);const done=!!rd.reviewedAt;
+    const offHrs=!done&&!inWorkHours(now());
+    const cls=done?'done':offHrs?'paused':'live';
+    const clock=`<span class="disc-timer ${cls}">${this.fmtHMS(ms)}</span>`;
+    if(done)return clock+` <span class="cellsub">review time · decided ${fmtDT(rd.reviewedAt)}</span>`;
+    if(offHrs)return clock+` <span class="cellsub" title="Working hours are Mon–Fri 10:30–19:30 — paused on weekends & off-hours">⏸ ${isWeekend(now())?'weekend':'off-hours'} · resumes ${fmtDT(nextWorkStart(now()))}</span>`;
+    return clock+` <span class="cellsub">reviewing — clock running</span>`;
+  },
+  // Live tick for every on-screen review clock (container carries data-revsub=submittedAt).
+  startReviewTicks(){
+    clearInterval(this._revT);
+    const upd=()=>{const els=document.querySelectorAll('[data-revsub]');if(!els.length){clearInterval(this._revT);this._revT=null;return;}
+      els.forEach(el=>{const sub=+el.getAttribute('data-revsub');if(!sub)return;const clk=el.querySelector('.disc-timer');if(!clk)return;clk.textContent=this.fmtHMS(workMsBetween(sub,now()));clk.className='disc-timer '+(inWorkHours(now())?'live':'paused');});};
+    this._revT=setInterval(upd,1000);
+  },
   // Per-round + total time report
   timeReportHTML(r){
     const rounds=(r.rounds||[]);
@@ -6143,6 +6168,7 @@ Object.assign(App,{
       </div>`);
     if(openRd&&(this.canRunDiscovery(r)||this.can('admin')))this.wireDrop(r.id);
     this.startDiscTick(id);
+    this.startReviewTicks();
     if(_fresh)this.playFsOpen();
   },
 
