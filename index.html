@@ -1184,6 +1184,11 @@ const App={
       // Snapshot loaded rows so saveReqsCloud only re-sends CHANGED/NEW ones —
       // never re-validating unrelated existing rows against the DB triggers.
       this._reqSnap = {}; this.db.reqs.forEach(r=>{this._reqSnap[r.id]=JSON.stringify(this.stripMeta(r));});
+      // Review clock: any request already awaiting review before this clock existed
+      // has no review timer. Start it FRESH from now (never retroactively from the
+      // old submit time) so it reads as review time, not carried-over discovery time.
+      // AFTER the snapshot so the change is detected and persisted once.
+      {let _rm=false;this.db.reqs.forEach(r=>{if(r.status==='under_review'&&r.reviewAccumMs==null&&!r.reviewRunSince&&this.submittedRound(r)){r.reviewRunSince=now();_rm=true;}});if(_rm)this.save('reqs').catch(()=>{});}
 
       // Enquiries (role/team isolation enforced via RLS)
       try{
@@ -5678,12 +5683,9 @@ Object.assign(App,{
      via workMsBetween). To-and-fro with discovery: auto-STARTS when a round is
      submitted; auto-STOPS on selection / rejection / next-round request / campaign
      over; RESUMES (adds on) when the next round is submitted. ---- */
-  // Effective "running since" — real accumulator field, or (legacy: a round that
-  // was submitted before this clock existed) the current submitted round's time.
-  _reviewSince(r){if(!r)return null;if(r.reviewRunSince)return r.reviewRunSince;if(r.reviewAccumMs==null){const sub=this.submittedRound(r);if(sub&&sub.submittedAt)return sub.submittedAt;}return null;},
-  reviewElapsedMs(r){if(!r)return 0;let acc=r.reviewAccumMs||0;const s=this._reviewSince(r);if(s)acc+=workMsBetween(s,now());return acc;},
-  reviewRunning(r){return !!this._reviewSince(r);},
-  reviewStarted(r){return !!(r&&(r.reviewAccumMs!=null||this._reviewSince(r)));},
+  reviewElapsedMs(r){if(!r)return 0;let acc=r.reviewAccumMs||0;if(r.reviewRunSince)acc+=workMsBetween(r.reviewRunSince,now());return acc;},
+  reviewRunning(r){return !!(r&&r.reviewRunSince);},
+  reviewStarted(r){return !!(r&&(r.reviewAccumMs!=null||r.reviewRunSince));},
   reviewClockStart(r){if(!r)return;if(r.reviewAccumMs==null)r.reviewAccumMs=0;if(!r.reviewRunSince)r.reviewRunSince=now();},
   reviewClockStop(r){if(r&&r.reviewRunSince){r.reviewAccumMs=(r.reviewAccumMs||0)+workMsBetween(r.reviewRunSince,now());r.reviewRunSince=null;}},
   // per-round review time (how long THAT round's review took), for the history stat
