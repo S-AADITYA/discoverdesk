@@ -1,38 +1,22 @@
 -- ============================================================
--- DiscoverDesk — reliable account deletion + admin recognition
--- Run once (already applied). Safe to re-run.
+-- DiscoverDesk — let deleted users register again (auth cleanup)
+-- WHY: account deletion removed only the profile row, never the auth.users
+-- login, so re-signup failed with "User already registered".
+-- RUN THIS ONCE in the Supabase SQL editor (it runs as the postgres role, which
+-- can delete from the auth schema). Safe to re-run.
 -- ============================================================
 
--- is_admin() also trusts an app-granted admin permission (perms.admin), not
--- just role='admin', so every admin action the app allows is allowed by the DB.
-create or replace function public.is_admin() returns boolean
-  language sql stable security definer set search_path = public as $$
-  select exists(
-    select 1 from public.profiles
-    where id = auth.uid() and status = 'active'
-      and (role_key = 'admin' or role = 'admin'
-           or coalesce(perms->>'admin','') in ('1','true','t','yes'))
-  );
-$$;
-
--- One explicit, race-proof deletion path the client calls directly.
+-- 1) Deletion now also removes the login so the email is freed.
 create or replace function public.admin_delete_user(p_id uuid) returns boolean
   language plpgsql security definer set search_path = public as $$
 begin
-  if not public.is_admin() then
-    raise exception 'not authorized';
-  end if;
+  if not public.is_admin() then raise exception 'not authorized'; end if;
   if exists(select 1 from public.profiles where id = p_id and coalesce(locked,false) = true) then
     raise exception 'the permanent owner cannot be deleted';
   end if;
-  -- hand any live work back to the pool, then remove the account
   update public.requests set assignee_id = null, assigned_to_id = null
     where assignee_id = p_id or assigned_to_id = p_id;
   delete from public.profiles where id = p_id;
-  -- Also free the LOGIN so the same email can register again. Deleting only the
-  -- profile left the auth.users row behind, so re-signup failed with
-  -- "User already registered". Best-effort: if the owner lacks rights on the auth
-  -- schema, the profile delete above still stands.
   begin
     delete from auth.users where id = p_id;
   exception when others then
@@ -40,11 +24,9 @@ begin
   end;
   return true;
 end $$;
-
 grant execute on function public.admin_delete_user(uuid) to authenticated;
 
--- Free an email that was deleted before this fix (orphaned auth.users row with no
--- profile) OR clear a stuck email entirely so it can register fresh. Admin-only.
+-- 2) Admin helper to free a stuck/orphaned email (used by the app + one-offs).
 create or replace function public.admin_free_email(p_email text) returns text
   language plpgsql security definer set search_path = public as $$
 declare v_count int := 0;
@@ -62,5 +44,12 @@ begin
   end;
   return 'freed ' || p_email || ' (auth rows removed: ' || v_count || ')';
 end $$;
-
 grant execute on function public.admin_free_email(text) to authenticated;
+
+-- 3) ONE-OFF: free the specific email that is currently stuck.
+select public.admin_free_email('anu@myhaulstore.com');
+
+-- (If you get "not authorized" running step 3, run this raw cleanup instead —
+--  the SQL editor runs as postgres so it always works:)
+-- delete from public.profiles where lower(email) = 'anu@myhaulstore.com';
+-- delete from auth.users     where lower(email) = 'anu@myhaulstore.com';

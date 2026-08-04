@@ -5109,7 +5109,7 @@ const App={
     this.set(`
       ${pending.length?`<div class="notice" style="margin-bottom:16px">${svg(IC.people,16)}<div><b>${pending.length} account${pending.length>1?'s':''}</b> waiting for approval below.</div></div>`:''}
       <div class="pagehead"><div class="lead"><h2>People & access</h2><p>Approve accounts, set roles, and control what each person sees</p></div>
-        <div class="acts"><input class="inp" style="width:210px" placeholder="🔍 Search people by name…" value="${esc(this._uq||'')}" onkeydown="if(event.key==='Enter'){App._uq=this.value.trim().toLowerCase();App.vUsers()}">${this._uq?`<button class="btn ghost sm" onclick="App._uq='';App.vUsers()">Clear</button>`:''}${!CLOUD?`<button class="btn primary" onclick="App.createAccount()">${svg(IC.plus,15)} Create account</button>`:''}<button class="btn ghost" onclick="App.backup()">${svg(IC.down,15)} Download full backup</button><button class="btn ghost" onclick="document.getElementById('restoreFile').click()">${svg(IC.up,15)} Restore backup</button><button class="btn ghost" style="color:var(--danger)" onclick="App.resetWorkspace()">Reset workspace</button></div></div>
+        <div class="acts"><input class="inp" style="width:210px" placeholder="🔍 Search people by name…" value="${esc(this._uq||'')}" onkeydown="if(event.key==='Enter'){App._uq=this.value.trim().toLowerCase();App.vUsers()}">${this._uq?`<button class="btn ghost sm" onclick="App._uq='';App.vUsers()">Clear</button>`:''}${!CLOUD?`<button class="btn primary" onclick="App.createAccount()">${svg(IC.plus,15)} Create account</button>`:''}${CLOUD?`<button class="btn ghost" title="If a deleted user can't sign up again (“user already exists”), free their email here." onclick="App.freeEmail()">${svg(IC.mail,15)} Free a deleted email</button>`:''}<button class="btn ghost" onclick="App.backup()">${svg(IC.down,15)} Download full backup</button><button class="btn ghost" onclick="document.getElementById('restoreFile').click()">${svg(IC.up,15)} Restore backup</button><button class="btn ghost" style="color:var(--danger)" onclick="App.resetWorkspace()">Reset workspace</button></div></div>
       <input type="file" id="restoreFile" accept=".json" style="display:none" onchange="App.restore(event)">
       ${pending.length?`<div class="sec-t">Pending approval</div><div class="card" style="margin-bottom:20px"><table class="tbl"><tbody>${pending.map(row).join('')}</tbody></table></div>`:''}
       <div class="sec-t">Team</div><div class="card"><table class="tbl"><thead><tr><th>Person</th><th>Role</th><th>Status</th><th>Joined</th><th></th></tr></thead><tbody>${active.map(row).join('')}${disabled.map(row).join('')}</tbody></table></div>
@@ -5224,6 +5224,28 @@ where email = '${esc(this.me.email||'you@yourcompany.com')}';</pre><p class="cel
     u.status=u.status==='active'?'inactive':'active';
     await this.save('users');this.pushLog&&this.pushLog((u.status==='active'?'Reactivated ':'Deactivated ')+u.name);
     this.toast(u.name+' '+(u.status==='active'?'reactivated':'deactivated'),'ok');this.closeAll();this.vUsers&&this.vUsers();
+  },
+  // Free a deleted user's email so they can register again. Deletion removes the
+  // profile AND (via admin_delete_user) the auth login, but users deleted before
+  // that fix left an orphaned auth.users row. This clears both for one email.
+  async freeEmail(){
+    if(!this.can('admin')||!CLOUD)return;
+    const email=(prompt('Email to free so it can register again (a deleted user stuck on “user already exists”):')||'').trim();
+    if(!email)return;
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))return this.toast('Enter a valid email address','err');
+    if(email.toLowerCase()===(this.me.email||'').toLowerCase())return this.toast('You can\'t free your own email','err');
+    try{
+      const {data,error}=await SB.rpc('admin_free_email',{p_email:email});
+      if(error)throw error;
+      this.db.users=this.db.users.filter(u=>(u.email||'').toLowerCase()!==email.toLowerCase());
+      this.renderNav();this.vUsers();
+      this.toast(typeof data==='string'?data:('Freed '+email+' — they can sign up again'),'ok');
+    }catch(e){
+      const m=(e&&e.message)||(''+e);
+      if(/admin_free_email.*does not exist|could not find the function|schema cache/i.test(m))
+        return this.toast('Run supabase-free-deleted-emails.sql in Supabase once, then retry.','err');
+      this.toast('Could not free '+email+': '+m,'err');
+    }
   },
   async deleteAccount(id){
     const u=this.user(id);if(!u)return;
